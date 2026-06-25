@@ -4,6 +4,7 @@ Enum-typed API fields (priority, status, from, content.type, ...) are kept as
 plain `str` here, not Literal/Enum: this is a read-mirror, so a new enum value
 Botmaker adds in the future should pass through, not raise.
 """
+from __future__ import annotations
 
 from datetime import datetime
 

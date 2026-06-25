@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import psycopg
 from psycopg.types.json import Jsonb
 
