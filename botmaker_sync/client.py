@@ -23,7 +23,7 @@ class BotmakerClient:
     as an opaque token to resend via `next-page-token` (contacts); the spec is
     inconsistent about which, so both are handled."""
 
-    def __init__(self, access_token: str, base_url: str, timeout: float = 30.0):
+    def __init__(self, access_token: str, base_url: str, timeout: float = 60.0):
         self._client = httpx.Client(
             base_url=base_url,
             headers={"access-token": access_token},
