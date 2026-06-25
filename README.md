@@ -6,6 +6,8 @@ Extrae chats, sesiones (conversaciones), agentes, canales y contactos de la
 ## Configuración
 
 ```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # completá BOTMAKER_ACCESS_TOKEN y DATABASE_URL
 python -m botmaker_sync init-db
@@ -49,7 +51,7 @@ Corré el comando de nuevo cada vez que quieras datos nuevos -- con un
 cron/Task Scheduler si querés que sea automático:
 
 ```cron
-0 * * * * cd /path/to/botmaker && bin/python -m botmaker_sync run >> sync.log 2>&1
+0 * * * * cd /path/to/botmaker && venv/bin/python -m botmaker_sync run >> sync.log 2>&1
 ```
 
 ### `--entities` y `--since`/`--until`: cómo funcionan

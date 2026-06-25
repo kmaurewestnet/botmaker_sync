@@ -1,9 +1,5 @@
-# venv (creado directo en la raíz del proyecto)
-bin/
-lib/
-lib64
-include/
-pyvenv.cfg
+# venv
+venv/
 
 # secretos -- nunca commitear
 .env
