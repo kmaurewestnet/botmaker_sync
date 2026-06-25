@@ -16,7 +16,7 @@ python -m botmaker_sync init-db
 El `BOTMAKER_ACCESS_TOKEN` se genera en la
 [página de integraciones de Botmaker](https://go.botmaker.com/#/integrations/api).
 
-### Dónde vive Postgres (local, IP o dominio)
+### Postgres (local, IP o dominio)
 
 `DATABASE_URL` es la única configuración del destino, y el host puede ser
 `localhost`, una IP o un dominio indistintamente -- no hace falta tocar
