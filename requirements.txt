@@ -1,0 +1,6 @@
+httpx>=0.28
+psycopg[binary]>=3.3
+pydantic>=2.13
+python-dotenv>=1.2
+pytest>=9.1
+respx>=0.23

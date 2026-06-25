@@ -1,0 +1,27 @@
+# venv (creado directo en la raíz del proyecto)
+bin/
+lib/
+lib64
+include/
+pyvenv.cfg
+
+# secretos -- nunca commitear
+.env
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# logs
+sync.log
+
+# grafo generado por graphify, regenerable con `graphify update .`
+graphify-out/
+
+# config local de Claude Code, no del proyecto
+.claude/
+CLAUDE.md
+
+# vault de Obsidian con notas sueltas, no es parte del proyecto
+/Botmaker/
