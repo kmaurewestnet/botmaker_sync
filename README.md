@@ -13,6 +13,14 @@ cp .env.example .env   # completá BOTMAKER_ACCESS_TOKEN y DATABASE_URL
 python -m botmaker_sync init-db
 ```
 
+`requirements.txt` trae solo lo necesario para correr el sync (pensado para
+producción, donde no hace falta correr tests). Para desarrollo, instalá
+también `requirements-dev.txt` (agrega `pytest`/`respx`):
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 El `BOTMAKER_ACCESS_TOKEN` se genera en la
 [página de integraciones de Botmaker](https://go.botmaker.com/#/integrations/api).
 
