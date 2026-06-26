@@ -26,22 +26,10 @@ def _row(item: AgentModel) -> dict:
     }
 
 
-def sync_agents(
-    client: BotmakerClient,
-    conn: psycopg.Connection,
-    online: bool | None = None,
-    emails: str | None = None,
-) -> int:
-    """Full refresh: /agents has no time filter, so every run upserts the
-    current full list (optionally narrowed by `online`/`emails`)."""
-    params: dict[str, str] = {}
-    if online is not None:
-        params["online"] = "true" if online else "false"
-    if emails:
-        params["emails"] = emails
-
+def sync_agents(client: BotmakerClient, conn: psycopg.Connection) -> int:
+    """Full refresh: /agents has no time filter, so every run upserts the current full list."""
     count = 0
-    for page in client.get_pages("/agents", params=params):
+    for page in client.get_pages("/agents"):
         parsed = AgentsPage.model_validate(page)
         items = [item for item in parsed.items if item.id]
         upsert_rows(conn, TABLE, [_row(item) for item in items], pk_cols=["id"])

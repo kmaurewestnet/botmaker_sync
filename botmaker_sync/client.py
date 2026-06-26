@@ -34,9 +34,6 @@ class BotmakerClient:
         return self
 
     def __exit__(self, *exc_info) -> None:
-        self.close()
-
-    def close(self) -> None:
         self._client.close()
 
     def _get(self, url: str, params: dict | None) -> dict:

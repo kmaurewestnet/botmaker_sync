@@ -58,7 +58,6 @@ class AgentModel(ApiModel):
 
 
 class AgentsPage(ApiModel):
-    next_page: str | None = Field(None, alias="nextPage")
     items: list[AgentModel] = Field(default_factory=list)
 
 
@@ -98,7 +97,6 @@ class ContactModel(ApiModel):
 
 
 class ContactsPage(ApiModel):
-    next_page: str | None = Field(None, alias="nextPage")
     items: list[ContactModel] = Field(default_factory=list)
 
 
@@ -131,7 +129,6 @@ class ChatModel(ApiModel):
 
 
 class ChatsPage(ApiModel):
-    next_page: str | None = Field(None, alias="nextPage")
     items: list[ChatModel] = Field(default_factory=list)
 
 
@@ -180,5 +177,4 @@ class SessionModel(ApiModel):
 
 
 class SessionsPage(ApiModel):
-    next_page: str | None = Field(None, alias="nextPage")
     items: list[SessionModel] = Field(default_factory=list)

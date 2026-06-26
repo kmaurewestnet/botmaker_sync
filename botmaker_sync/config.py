@@ -5,14 +5,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_BASE_URL = os.environ.get("BOTMAKER_API_BASE_URL", "https://api.botmaker.com/v2.0")
-
-
 @dataclass(frozen=True)
 class Settings:
     access_token: str
     database_url: str
-    api_base_url: str = API_BASE_URL
+    api_base_url: str = os.environ.get("BOTMAKER_API_BASE_URL", "https://api.botmaker.com/v2.0")
 
 
 def load_settings() -> Settings:
@@ -25,4 +22,4 @@ def load_settings() -> Settings:
     ]
     if missing:
         raise RuntimeError(f"Missing required environment variable(s): {', '.join(missing)}")
-    return Settings(access_token=access_token, database_url=database_url, api_base_url=API_BASE_URL)
+    return Settings(access_token=access_token, database_url=database_url)
