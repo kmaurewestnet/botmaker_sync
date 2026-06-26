@@ -129,6 +129,9 @@ class _FakeCursor:
     def executemany(self, *args, **kwargs):
         pass
 
+    def fetchall(self):
+        return []
+
     def fetchone(self):
         return (self._value,) if self._value is not None else None
 
