@@ -17,7 +17,7 @@ from botmaker_sync.sync.sessions import sync_sessions
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("botmaker_sync")
 
-ALL_ENTITIES = ["channels", "agents", "chats", "sessions"]
+ALL_ENTITIES = ["channels", "agents", "chats", "sessions", "contacts"]
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -34,7 +34,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> None:
     settings = load_settings()
-    entities = args.entities.split(",") if args.entities else ALL_ENTITIES
+    entities = args.entities.split(",") if args.entities else [e for e in ALL_ENTITIES if e != "contacts"]
     unknown = set(entities) - set(ALL_ENTITIES)
     if unknown:
         raise SystemExit(f"Unknown entities: {', '.join(sorted(unknown))}. Valid: {', '.join(ALL_ENTITIES)}")
@@ -54,14 +54,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         if "chats" in entities:
             since, until = resolve_window(conn, "chats", args.since, args.until)
             logger.info("chats: window %s -> %s", since, until)
-            touched = sync_chats(client, conn, since, until)
-            logger.info("chats: %d touched", len(touched))
+            n = sync_chats(client, conn, since, until)
+            logger.info("chats: %d upserted", n)
             if not manual_range:
                 set_watermark(conn, "chats", until)
                 conn.commit()
-
-            n = sync_contacts(client, conn, touched)
-            logger.info("contacts: %d upserted (scoped to this run's chats)", n)
 
         if "sessions" in entities:
             since, until = resolve_window(conn, "sessions", args.since, args.until)
@@ -79,6 +76,13 @@ def cmd_run(args: argparse.Namespace) -> None:
                 set_watermark(conn, "sessions", until)
                 conn.commit()
 
+        if "contacts" in entities:
+            # ponytail: contacts is CRM profile data, not conversational — run
+            # via a separate daily cron (--entities contacts), never in the
+            # 15-min incremental loop.
+            n = sync_contacts(client, conn)
+            logger.info("contacts: %d upserted", n)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="botmaker_sync")
@@ -89,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = sub.add_parser("run", help="Sync entities from the Botmaker API")
     run_parser.add_argument("--since", type=_parse_datetime, default=None, help="ISO datetime; overrides the watermark and is not persisted")
     run_parser.add_argument("--until", type=_parse_datetime, default=None, help="ISO datetime; defaults to now()")
-    run_parser.add_argument("--entities", default=None, help=f"Comma-separated subset of {ALL_ENTITIES} (default: all)")
+    run_parser.add_argument("--entities", default=None, help=f"Comma-separated subset of {ALL_ENTITIES} (default: all except contacts)")
     run_parser.add_argument("--include-ai-analysis", action="store_true")
     run_parser.add_argument("--include-open-sessions", action="store_true")
     run_parser.set_defaults(func=cmd_run)

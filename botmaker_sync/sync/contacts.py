@@ -1,4 +1,4 @@
-from collections import defaultdict
+from __future__ import annotations
 
 import psycopg
 
@@ -86,52 +86,27 @@ def _replace_children(conn: psycopg.Connection, item: ContactModel) -> None:
     )
 
 
-def sync_contacts(client: BotmakerClient, conn: psycopg.Connection, touched: set[tuple[str, str]]) -> int:
-    """No /contacts/{id} endpoint exists. Scope is enforced here: for each
-    channel seen in this run's chats, page through GET /contacts?channel-id=...
-    and keep only the contact_ids actually touched -- not a full channel mirror.
+def sync_contacts(client: BotmakerClient, conn: psycopg.Connection) -> int:
+    """Full sweep: page through every channel and upsert all contacts found.
 
-    `touched` holds (channel_id, contact_id) pairs from the /chats response,
-    where contact_id is the platform id (e.g. a phone number). /contacts
-    items expose that same value as chats[].platformContactId, not item.id
-    (item.id is Botmaker's internal contact id) -- match on that, not item.id.
-
-    ponytail: if a touched contact never turns up in its channel's listing
-    (data drift on Botmaker's side), this scans that whole channel once. No
-    page-count cutoff added; revisit if /contacts volume becomes a real cost.
+    Contacts are CRM profile data — slow-changing, not conversational. Running
+    this on every 15-min cron caused hundreds of API pages per new contact
+    (listings are oldest-first; new contacts appear at the end). Decoupled to
+    a daily cron instead: one sweep per day, no per-run filtering needed.
     """
-    by_channel: dict[str, set[str]] = defaultdict(set)
-    for channel_id, contact_id in touched:
-        by_channel[channel_id].add(contact_id)
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM channels WHERE active = true OR active IS NULL")
+        channel_ids = [row[0] for row in cur.fetchall()]
 
     count = 0
-    for channel_id, wanted_ids in by_channel.items():
-        remaining = set(wanted_ids)
-
-        # Skip contacts already in the DB — avoids full-channel pagination on
-        # every incremental run (most contacts recur across cron windows).
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT platform_contact_id FROM contact_chats"
-                " WHERE chat_channel_id = %s AND platform_contact_id = ANY(%s)",
-                (channel_id, list(remaining)),
-            )
-            already_known = {row[0] for row in cur.fetchall()}
-        remaining -= already_known
-        if not remaining:
-            continue
-
+    for channel_id in channel_ids:
         for page in client.get_pages("/contacts", params={"channel-id": channel_id}):
-            if not remaining:
-                break
             parsed = ContactsPage.model_validate(page)
             for item in parsed.items:
-                matched = {c.platform_contact_id for c in item.chats if c.chat_channel_id == channel_id} & remaining
-                if not matched:
+                if not item.id:
                     continue
                 upsert_rows(conn, TABLE, [_row(item)], pk_cols=["id"])
                 _replace_children(conn, item)
-                remaining -= matched
                 count += 1
             conn.commit()
     return count

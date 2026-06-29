@@ -42,24 +42,16 @@ def sync_chats(
     conn: psycopg.Connection,
     since: datetime | None,
     until: datetime,
-) -> set[tuple[str, str]]:
-    """Incremental by last activity. Returns the (channel_id, contact_id) pairs
-    touched this run, so the caller can fetch only those contacts."""
+) -> int:
+    """Incremental by last activity."""
     params: dict[str, str] = {"to": format_datetime(until)}
     if since is not None:
         params["from"] = format_datetime(since)
 
-    touched: set[tuple[str, str]] = set()
+    count = 0
     for page in client.get_pages("/chats", params=params):
         parsed = ChatsPage.model_validate(page)
-        rows = []
-        for item in parsed.items:
-            row = _row(item)
-            if row is None:
-                continue
-            rows.append(row)
-            if row["channel_id"] and row["contact_id"]:
-                touched.add((row["channel_id"], row["contact_id"]))
+        rows = [row for item in parsed.items if (row := _row(item)) is not None]
         upsert_rows(conn, TABLE, rows, pk_cols=["chat_id"])
         for item in parsed.items:
             if item.chat is None or not item.chat.chat_id:
@@ -80,4 +72,5 @@ def sync_chats(
                 [{"chat_id": chat_id, "key": k, "value": v} for k, v in item.variables.items()],
             )
         conn.commit()
-    return touched
+        count += len(rows)
+    return count

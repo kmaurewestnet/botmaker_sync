@@ -114,8 +114,9 @@ def test_session_row_pulls_refs_and_variables_from_nested_chat():
 
 
 class _FakeCursor:
-    def __init__(self, value):
+    def __init__(self, value, rows=None):
         self._value = value
+        self._rows = rows or []
 
     def __enter__(self):
         return self
@@ -130,18 +131,19 @@ class _FakeCursor:
         pass
 
     def fetchall(self):
-        return []
+        return self._rows
 
     def fetchone(self):
         return (self._value,) if self._value is not None else None
 
 
 class _FakeConn:
-    def __init__(self, watermark=None):
+    def __init__(self, watermark=None, rows=None):
         self._watermark = watermark
+        self._rows = rows or []
 
     def cursor(self):
-        return _FakeCursor(self._watermark)
+        return _FakeCursor(self._watermark, self._rows)
 
     def commit(self):
         pass
@@ -168,23 +170,16 @@ def test_resolve_window_first_run_has_no_lower_bound():
 
 
 @respx.mock
-def test_sync_contacts_matches_by_platform_contact_id_not_internal_id():
-    """item.id is Botmaker's internal contact id; touched holds the platform
-    id (phone number) seen on the chat. A contact whose internal id differs
-    from the touched value must still match via chats[].platformContactId."""
+def test_sync_contacts_full_sweep_upserts_all_items():
+    """sync_contacts reads channel ids from the DB and upserts every contact
+    returned — no filtering by touched set (contacts run daily, not per-cron)."""
     respx.get(f"{BASE}/contacts").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "items": [
-                    {
-                        "id": "internal-xyz",
-                        "chats": [{"platformContactId": "549", "chatChannelId": "cc1"}],
-                    }
-                ]
-            },
+            json={"items": [{"id": "internal-xyz"}, {"id": "internal-abc"}]},
         )
     )
     client = BotmakerClient("tok", BASE)
-    n = sync_contacts(client, _FakeConn(), {("cc1", "549")})
-    assert n == 1
+    # _FakeConn rows simulates SELECT id FROM channels returning one channel
+    n = sync_contacts(client, _FakeConn(rows=[("cc1",)]))
+    assert n == 2
