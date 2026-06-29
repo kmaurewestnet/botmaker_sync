@@ -27,8 +27,7 @@ El `BOTMAKER_ACCESS_TOKEN` se genera en la
 ### Postgres (local, IP o dominio)
 
 `DATABASE_URL` es la única configuración del destino, y el host puede ser
-`localhost`, una IP o un dominio indistintamente -- no hace falta tocar
-código para apuntar a producción. Para cualquier host que no sea
+`localhost`, una IP o un dominio indistintamente. Para cualquier host que no sea
 `localhost`, agregá `?sslmode=require` (o `verify-full` si tenés el
 certificado de la CA) al final de la URL: sin eso, la conexión usa
 `sslmode=prefer` por defecto, que cae a una conexión **sin cifrar** en
