@@ -20,6 +20,7 @@ def _row(item: SessionModel) -> dict | None:
     if not item.id:
         return None
     ref = item.chat.chat if item.chat else None
+    is_open = not any(e.name == "conversation-close" for e in item.events)
     return {
         "id": item.id,
         "chat_id": ref.chat_id if ref else None,
@@ -27,6 +28,7 @@ def _row(item: SessionModel) -> dict | None:
         "contact_id": ref.contact_id if ref else None,
         "creation_time": item.creation_time,
         "starting_cause": item.starting_cause,
+        "is_open": is_open,
     }
 
 

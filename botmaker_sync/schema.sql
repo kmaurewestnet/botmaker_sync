@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS chat_variables (
 
 -- ===== sessions (= conversations) =====
 -- Incremental by session start time (`from`/`to` on GET /sessions).
+-- is_open: derived from events — false once a conversation-close event is received.
 CREATE TABLE IF NOT EXISTS sessions (
     id             text PRIMARY KEY,
     chat_id        text, -- soft ref: chats window (last activity) != sessions window (start time)
@@ -176,8 +177,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     contact_id     text,
     creation_time  timestamptz,
     starting_cause text,
+    is_open        boolean NOT NULL DEFAULT true,
     synced_at      timestamptz NOT NULL DEFAULT now()
 );
+-- Migration: add is_open to pre-existing installs.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_open boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS idx_sessions_chat_id ON sessions(chat_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_creation_time ON sessions(creation_time);
 

@@ -95,8 +95,9 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--until", type=_parse_datetime, default=None, help="ISO datetime; defaults to now()")
     run_parser.add_argument("--entities", default=None, help=f"Comma-separated subset of {ALL_ENTITIES} (default: all except contacts)")
     run_parser.add_argument("--include-ai-analysis", action="store_true")
-    run_parser.add_argument("--include-open-sessions", action="store_true")
-    run_parser.set_defaults(func=cmd_run)
+    run_parser.add_argument("--no-open-sessions", dest="include_open_sessions", action="store_false",
+                            help="Exclude ongoing open sessions (default: include them)")
+    run_parser.set_defaults(func=cmd_run, include_open_sessions=True)
 
     args = parser.parse_args(argv)
     args.func(args)
