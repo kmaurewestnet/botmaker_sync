@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 import psycopg
@@ -66,6 +66,17 @@ def sync_sessions(
         params["from"] = format_datetime(since)
     if include_open:
         params["include-open-sessions"] = "true"
+        # Extend 'from' to cover sessions that were open last run but may have
+        # closed since — they're outside the current watermark window and won't
+        # appear otherwise. Only override if earlier than the current 'from'.
+        with conn.cursor() as cur:
+            cur.execute("SELECT MIN(creation_time) FROM sessions WHERE is_open = true")
+            row = cur.fetchone()
+        earliest_open: datetime | None = row[0] if row else None
+        if earliest_open is not None:
+            current_from = since or datetime.min.replace(tzinfo=timezone.utc)
+            if earliest_open < current_from:
+                params["from"] = format_datetime(earliest_open)
     if include_ai_analysis:
         params["include-ai-analysis"] = "true"
 
