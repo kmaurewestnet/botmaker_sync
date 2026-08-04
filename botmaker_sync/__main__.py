@@ -70,6 +70,9 @@ def cmd_run(args: argparse.Namespace) -> None:
                 until,
                 include_open=args.include_open_sessions,
                 include_ai_analysis=args.include_ai_analysis,
+                # An ad-hoc range must not mutate global is_open state, same
+                # reason it doesn't advance the watermark.
+                close_expired=not manual_range,
             )
             logger.info("sessions: %d upserted", n)
             if not manual_range:
@@ -91,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init-db", help="Create/update the Postgres schema").set_defaults(func=cmd_init_db)
 
     run_parser = sub.add_parser("run", help="Sync entities from the Botmaker API")
-    run_parser.add_argument("--since", type=_parse_datetime, default=None, help="ISO datetime; overrides the watermark and is not persisted")
+    run_parser.add_argument("--since", type=_parse_datetime, default=None, help="ISO datetime; overrides the watermark and is not persisted. Ranges wider than 30 days are rejected (API limit)")
     run_parser.add_argument("--until", type=_parse_datetime, default=None, help="ISO datetime; defaults to now()")
     run_parser.add_argument("--entities", default=None, help=f"Comma-separated subset of {ALL_ENTITIES} (default: all except contacts)")
     run_parser.add_argument("--include-ai-analysis", action="store_true")

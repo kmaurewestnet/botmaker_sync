@@ -45,10 +45,16 @@ def upsert_rows(
     rows: list[dict],
     pk_cols: list[str],
     synced_at_on: list[str] | None = None,
+    set_overrides: dict[str, str] | None = None,
 ) -> None:
-    """INSERT ... ON CONFLICT DO UPDATE. `table`/`pk_cols`/`synced_at_on` are
-    internal constants (never user input), so f-string identifiers here carry no
-    injection risk; row values always go through parameterized placeholders.
+    """INSERT ... ON CONFLICT DO UPDATE. `table`/`pk_cols`/`synced_at_on`/
+    `set_overrides` are internal constants (never user input), so f-string
+    identifiers and expressions here carry no injection risk; row values always
+    go through parameterized placeholders.
+
+    `set_overrides` maps a column to the SQL expression used for it in the
+    DO UPDATE SET, replacing the default `EXCLUDED.{col}`. Used by sessions to
+    latch is_open/closed_reason so a later fetch can't reopen a closed session.
 
     `synced_at_on` names the columns whose change should advance `synced_at`.
     It is applied as a CASE on that one column, *not* as an `ON CONFLICT ... WHERE`:
@@ -64,7 +70,11 @@ def upsert_rows(
     placeholders = ", ".join(f"%({c})s" for c in columns)
     update_cols = [c for c in columns if c not in pk_cols]
     if update_cols:
-        sets = [f"{c} = EXCLUDED.{c}" for c in update_cols]
+        overrides = set_overrides or {}
+        unknown = [c for c in overrides if c not in columns]
+        if unknown:
+            raise ValueError(f"{table}: set_overrides columns not in row: {', '.join(unknown)}")
+        sets = [f"{c} = {overrides.get(c, f'EXCLUDED.{c}')}" for c in update_cols]
         if synced_at_on:
             missing = [c for c in synced_at_on if c not in columns]
             if missing:

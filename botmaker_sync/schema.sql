@@ -174,7 +174,17 @@ CREATE TABLE IF NOT EXISTS chat_variables (
 
 -- ===== sessions (= conversations) =====
 -- Incremental by session start time (`from`/`to` on GET /sessions).
--- is_open: derived from events — false once a conversation-close event is received.
+-- Three states, not two:
+--   is_open = true                              -> ongoing as far as we know
+--   is_open = false, closed_reason='event'      -> observed: the API sent a
+--                                                  conversation-close event
+--   is_open = false, closed_reason='window_expired'
+--                                               -> ASSUMED: the session aged out
+--                                                  of the lookback window, so the
+--                                                  API will not return it again and
+--                                                  we can never observe its close.
+-- 'window_expired' is NOT a fact reported by Botmaker. Anything measuring session
+-- duration or abandonment must filter on closed_reason.
 CREATE TABLE IF NOT EXISTS sessions (
     id             text PRIMARY KEY,
     chat_id        text, -- soft ref: chats window (last activity) != sessions window (start time)
@@ -183,12 +193,17 @@ CREATE TABLE IF NOT EXISTS sessions (
     creation_time  timestamptz,
     starting_cause text,
     is_open        boolean NOT NULL DEFAULT true,
+    closed_reason  text, -- NULL while is_open; 'event' | 'window_expired'
     synced_at      timestamptz NOT NULL DEFAULT now()
 );
--- Migration: add is_open to pre-existing installs.
+-- Migration: add is_open/closed_reason to pre-existing installs.
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_open boolean NOT NULL DEFAULT true;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS closed_reason text;
 CREATE INDEX IF NOT EXISTS idx_sessions_chat_id ON sessions(chat_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_creation_time ON sessions(creation_time);
+-- Partial index: both the MIN(creation_time) lookback probe and the expiry sweep
+-- scan only open sessions, which are a small slice of the table.
+CREATE INDEX IF NOT EXISTS idx_sessions_open ON sessions(creation_time) WHERE is_open;
 
 -- content/encryption_params stay jsonb: `content` is a tagged union (type
 -- decides which sibling field is populated) on a high-volume table, not a

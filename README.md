@@ -50,8 +50,9 @@ python -m botmaker_sync run --since 2026-01-01T00:00:00 --until 2026-01-02T00:00
 # Solo algunas entidades:
 python -m botmaker_sync run --entities channels,agents
 
-# Incluir análisis de IA de la conversación / sesiones todavía abiertas:
-python -m botmaker_sync run --include-ai-analysis --include-open-sessions
+# Incluir análisis de IA de la conversación (las sesiones abiertas ya vienen
+# por defecto; usá --no-open-sessions para excluirlas):
+python -m botmaker_sync run --include-ai-analysis
 ```
 
 Corré el comando de nuevo cada vez que quieras datos nuevos -- con un
@@ -91,10 +92,11 @@ cron/Task Scheduler si querés que sea automático:
   `chats` se vuelve a upsertear (es idempotente, `ON CONFLICT DO UPDATE`),
   se reconstruye `touched` en memoria y `contacts` se reintenta para esos
   chats -- sin avanzar el watermark, porque `--until` activó el modo manual.
-  Importante: pasar un `--since` muy lejano (ej. `2000-01-01`) en vez de
-  omitirlo tira `400 INVALID_DATETIME_INTERVAL` -- la API de Botmaker no
-  acepta un rango `from`/`to` mayor a 1 mes sin `long-term-search=true` (ver
-  [Limitaciones conocidas](#limitaciones-conocidas)).
+  Importante: la API de Botmaker no acepta un rango `from`/`to` mayor a 1 mes
+  sin `long-term-search=true` (ver
+  [Limitaciones conocidas](#limitaciones-conocidas)). Un `--since` muy lejano
+  (ej. `2000-01-01`) ahora falla de entrada con un `ValueError` explícito,
+  antes de gastar la llamada.
 
 ## Qué se sincroniza, y cómo
 
@@ -103,7 +105,7 @@ cron/Task Scheduler si querés que sea automático:
 | channels | `GET /channels` | refresh completo en cada corrida (sin filtro de tiempo) |
 | agents | `GET /agents` | refresh completo en cada corrida (sin filtro de tiempo) |
 | chats | `GET /chats` | incremental, `from`/`to` por última actividad |
-| sessions | `GET /sessions` | incremental, `from`/`to` por inicio de sesión, incluye mensajes/variables/eventos |
+| sessions | `GET /sessions` | incremental, `from`/`to` por inicio de sesión, incluye mensajes/variables/eventos. El `from` se extiende hasta la sesión abierta más vieja, con tope de 25 días |
 | contacts | `GET /contacts?channel-id=...` | **acotado**: solo contactos referenciados por los chats de esta corrida |
 
 Las entidades incrementales (`chats`, `sessions`) guardan un watermark por
@@ -128,6 +130,28 @@ No significa lo mismo en todas las tablas:
   ahí estamparía todas las filas con la hora del cron, sin información. En
   `sessions` el único timestamp de la API a nivel de fila es `creation_time`,
   que nunca cambia.
+
+### Sesiones abiertas y `closed_reason`
+
+`sessions` tiene tres estados, no dos:
+
+| `is_open` | `closed_reason` | Significa |
+|---|---|---|
+| `true` | `NULL` | En curso, hasta donde sabemos |
+| `false` | `'event'` | **Observado**: la API mandó `conversation-close` |
+| `false` | `'window_expired'` | **Asumido**: la sesión salió de la ventana de lookback |
+
+`'window_expired'` **no es un dato que reporte Botmaker**. Cualquier métrica de
+duración o abandono tiene que filtrar por `closed_reason`, o va a tratar como
+cierres reales lo que son suposiciones nuestras.
+
+Existe porque sin `long-term-search` la API deja de devolver sesiones pasada su
+ventana: si una sesión se cierra después de eso, nunca podemos verlo. Dejarlas
+abiertas para siempre no es gratis — el sync extiende el `from` hasta la sesión
+abierta más vieja, así que una sola sesión colgada ensancha la ventana de todas
+las corridas hasta pasarse del límite de la API. `OPEN_SESSION_LOOKBACK`
+(`sync/sessions.py`, 25 días) topea ese alcance, y lo que queda afuera se cierra
+con `'window_expired'` al final de cada corrida.
 
 Los chats que ya estaban en la tabla antes de este cambio arrastran su
 `synced_at` de primera vez hasta que vuelvan a tener actividad. Para dejar una
@@ -200,11 +224,16 @@ Por archivo:
 ## Limitaciones conocidas
 
 - **Sin `long-term-search`**: ese flag suma costo facturado por BI del lado
-  de Botmaker, así que nunca se envía. Sin él, `/chats` y `/sessions` solo
-  devuelven datos dentro de su ventana reciente por defecto (aproximadamente
-  el último día), sin importar qué tan atrás se ponga `from`. Hay que correr
-  el sync con la frecuencia suficiente para que ningún hueco supere esa
-  ventana, o aceptar huecos si se salta un período.
+  de Botmaker, así que nunca se envía. Sin él la API rechaza con 400 cualquier
+  rango `from`/`to` mayor a 1 mes, y si se omite `from` cae a su ventana por
+  defecto (~1 día). Hay que correr el sync con la frecuencia suficiente para
+  que ningún hueco supere el mes, o aceptar huecos si se salta un período.
+- **Sesiones abandonadas**: una sesión sin evento `conversation-close` se
+  cierra por expiración a los 25 días (ver
+  [Sesiones abiertas y `closed_reason`](#sesiones-abiertas-y-closed_reason)).
+  Ese umbral tiene que ser mayor que cualquier caída esperable del cron: si el
+  sync está parado más tiempo que eso, las sesiones de ese hueco se marcan
+  `'window_expired'` sin haber sido observadas nunca.
 - **Alcance de contacts**: no existe un endpoint `/contacts/{id}`, así que
   "solo contactos nuevos" se implementa así: se junta cada par
   `(channel_id, contact_id)` visto en los chats de esta corrida, y luego se

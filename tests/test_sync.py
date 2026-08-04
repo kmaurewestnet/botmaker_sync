@@ -11,14 +11,20 @@ import respx
 
 import botmaker_sync.client as client_module
 import botmaker_sync.sync.chats as chats_module
-from botmaker_sync.client import BotmakerClient
+import botmaker_sync.sync.sessions as sessions_module
+from botmaker_sync.client import BotmakerClient, format_datetime
 from botmaker_sync.db import resolve_window, upsert_rows
 from botmaker_sync.models import ChatModel, SessionModel
 from botmaker_sync.sync.chats import _row as chat_row
 from botmaker_sync.sync.contacts import sync_contacts
-from botmaker_sync.sync.sessions import _row as session_row
+from botmaker_sync.sync.sessions import _row as session_row, sync_sessions
 
 BASE = "https://api.botmaker.com/v2.0"
+
+
+def _parse_sent(value: str) -> datetime:
+    """Inverse of client.format_datetime, for asserting on window width."""
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
 @respx.mock
@@ -120,6 +126,8 @@ class _FakeCursor:
         self._value = value
         self._rows = rows or []
         self._sql_log = sql_log if sql_log is not None else []
+        self._last = (None, None)
+        self.rowcount = 0
 
     def __enter__(self):
         return self
@@ -127,8 +135,9 @@ class _FakeCursor:
     def __exit__(self, *exc_info):
         return False
 
-    def execute(self, sql=None, *args, **kwargs):
+    def execute(self, sql=None, params=None, *args, **kwargs):
         self._sql_log.append(sql)
+        self._last = (sql, params)
 
     def executemany(self, sql=None, *args, **kwargs):
         self._sql_log.append(sql)
@@ -137,10 +146,18 @@ class _FakeCursor:
         return self._rows
 
     def fetchone(self):
+        sql, params = self._last
+        # Stand in for Postgres on the open-session probe only: without honoring
+        # its floor bound the clamp under test would be invisible here.
+        if self._value is not None and sql and "MIN(creation_time)" in sql and params:
+            return (None,) if self._value < params[0] else (self._value,)
         return (self._value,) if self._value is not None else None
 
 
 class _FakeConn:
+    """`watermark` feeds every fetchone() -- in sessions it stands in for the
+    MIN(creation_time) of open sessions, in db.py for the stored watermark."""
+
     def __init__(self, watermark=None, rows=None):
         self._watermark = watermark
         self._rows = rows or []
@@ -224,6 +241,140 @@ def test_sync_chats_passes_the_four_api_timestamps():
     # every gating column must exist in the row mapping, or the upsert raises
     row = chat_row(ChatModel.model_validate({"chat": {"chatId": "ch1"}}))
     assert all(c in row for c in chats_module.SYNCED_AT_ON)
+
+
+def _sessions_route(json=None, status=200):
+    return respx.get(f"{BASE}/sessions").mock(
+        return_value=httpx.Response(status, json=json if json is not None else {"items": []})
+    )
+
+
+@respx.mock
+def test_sync_sessions_ignores_an_open_session_older_than_the_lookback():
+    """The bug this fixes: a session stuck open since 2026-06-24 anchored `from`
+    to its creation_time, so every run asked for a 41-day range and got a 400."""
+    route = _sessions_route()
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    stuck_open = datetime(2026, 6, 24, 15, 47, tzinfo=timezone.utc)
+    since = until - timedelta(minutes=5)
+    sync_sessions(BotmakerClient("tok", BASE), _FakeConn(stuck_open), since, until, include_open=True)
+    sent = route.calls[0].request.url.params["from"]
+    assert sent == format_datetime(since)
+    assert until - _parse_sent(sent) <= sessions_module.MAX_API_RANGE
+
+
+@respx.mock
+def test_sync_sessions_still_widens_for_an_open_session_inside_the_lookback():
+    """The clamp must not kill the mechanism: an open session newer than the
+    floor but older than `since` still pulls `from` back to it."""
+    route = _sessions_route()
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    recent_open = until - timedelta(days=3)
+    since = until - timedelta(minutes=5)
+    sync_sessions(BotmakerClient("tok", BASE), _FakeConn(recent_open), since, until, include_open=True)
+    assert route.calls[0].request.url.params["from"] == format_datetime(recent_open)
+
+
+@respx.mock
+def test_sync_sessions_keeps_since_when_no_open_session_in_window():
+    route = _sessions_route()
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    since = until - timedelta(minutes=5)
+    sync_sessions(BotmakerClient("tok", BASE), _FakeConn(None), since, until, include_open=True)
+    assert route.calls[0].request.url.params["from"] == format_datetime(since)
+
+
+@respx.mock
+def test_sync_sessions_does_not_shrink_a_wider_since():
+    """An open session newer than `since` must not narrow the window."""
+    route = _sessions_route()
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    since = until - timedelta(days=10)
+    newer_open = until - timedelta(days=1)
+    sync_sessions(BotmakerClient("tok", BASE), _FakeConn(newer_open), since, until, include_open=True)
+    assert route.calls[0].request.url.params["from"] == format_datetime(since)
+
+
+@respx.mock
+def test_sync_sessions_rejects_a_manual_range_wider_than_the_api_limit():
+    route = _sessions_route()
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="exceeds the API limit"):
+        sync_sessions(BotmakerClient("tok", BASE), _FakeConn(None), until - timedelta(days=60), until)
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_sync_sessions_propagates_400_instead_of_dropping_from():
+    """Regression for the removed retry: it swallowed the 400, refetched without
+    `from`, and let the run report success over the API's ~1-day default."""
+    route = _sessions_route(json={"errors": [{"code": "INVALID_DATETIME_INTERVAL"}]}, status=400)
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    since = until - timedelta(minutes=5)
+    with pytest.raises(httpx.HTTPStatusError):
+        sync_sessions(BotmakerClient("tok", BASE), _FakeConn(None), since, until, include_open=True)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_sync_sessions_sweeps_expired_open_sessions_after_paging():
+    """Order matters: sessions that closed in this run are marked 'event' by the
+    upsert first, so the sweep can't relabel them 'window_expired'."""
+    _sessions_route(json={"items": [{"id": "s1", "events": [{"name": "conversation-close"}]}]})
+    conn = _FakeConn(None)
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    sync_sessions(BotmakerClient("tok", BASE), conn, until - timedelta(minutes=5), until, include_open=True)
+    upsert_at = next(i for i, s in enumerate(conn.sql_log) if s.startswith("INSERT INTO sessions"))
+    sweep_at = next(i for i, s in enumerate(conn.sql_log) if "window_expired" in s)
+    assert upsert_at < sweep_at
+
+
+@respx.mock
+def test_sync_sessions_skips_the_sweep_when_not_tracking_open_sessions():
+    _sessions_route()
+    until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    since = until - timedelta(minutes=5)
+    for kwargs in ({"include_open": False}, {"include_open": True, "close_expired": False}):
+        conn = _FakeConn(None)
+        sync_sessions(BotmakerClient("tok", BASE), conn, since, until, **kwargs)
+        assert not any("window_expired" in s for s in conn.sql_log), kwargs
+
+
+def test_session_row_records_how_the_session_was_closed():
+    closed = session_row(
+        SessionModel.model_validate({"id": "s1", "events": [{"name": "conversation-close"}]})
+    )
+    assert (closed["is_open"], closed["closed_reason"]) == (False, "event")
+    still_open = session_row(SessionModel.model_validate({"id": "s2", "events": []}))
+    assert (still_open["is_open"], still_open["closed_reason"]) == (True, None)
+
+
+def test_sessions_upsert_latches_the_close_state():
+    """A reopened session would resurrect the unbounded-lookback loop, and a
+    still-open fetch must not erase a reason already on record."""
+    conn = _FakeConn()
+    upsert_rows(
+        conn,
+        "sessions",
+        [{"id": "s1", "is_open": True, "closed_reason": None}],
+        pk_cols=["id"],
+        set_overrides=sessions_module._CLOSE_LATCH,
+    )
+    sql = conn.sql_log[0]
+    assert "is_open = sessions.is_open AND EXCLUDED.is_open" in sql
+    assert "closed_reason = COALESCE(EXCLUDED.closed_reason, sessions.closed_reason)" in sql
+
+
+def test_upsert_rejects_set_overrides_column_missing_from_the_row():
+    conn = _FakeConn()
+    with pytest.raises(ValueError, match="closed_reason"):
+        upsert_rows(
+            conn,
+            "sessions",
+            [{"id": "s1", "is_open": True}],
+            pk_cols=["id"],
+            set_overrides={"closed_reason": "'event'"},
+        )
 
 
 @respx.mock
