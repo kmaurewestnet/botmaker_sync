@@ -112,6 +112,33 @@ siguiente, menos un solapamiento de 5 minutos para que el upsert absorba
 duplicados de borde. Pasar `--since` y/o `--until` explícitamente cambia a un
 rango manual puntual y no toca el watermark.
 
+### Semántica de `synced_at`
+
+No significa lo mismo en todas las tablas:
+
+- **`chats`**: "última vez que cambió un timestamp de la API" — se actualiza solo
+  si cambió alguno de `creation_time`, `last_session_creation_time`,
+  `whatsapp_window_close_at` o `last_user_message_at` (`SYNCED_AT_ON` en
+  `sync/chats.py`). El resto de las columnas (`queue_id`, `agent_id`, tags,
+  variables) se refrescan siempre; solo `synced_at` está condicionado. El
+  solapamiento de 5 minutos re-trae chats sin cambios en cada corrida, así que
+  un `now()` incondicional sería solo la hora del cron.
+- **`channels` / `agents` / `contacts` / `sessions`**: sigue siendo *first seen*,
+  la hora del INSERT inicial. Las tres primeras son barridos completos — `now()`
+  ahí estamparía todas las filas con la hora del cron, sin información. En
+  `sessions` el único timestamp de la API a nivel de fila es `creation_time`,
+  que nunca cambia.
+
+Los chats que ya estaban en la tabla antes de este cambio arrastran su
+`synced_at` de primera vez hasta que vuelvan a tener actividad. Para dejar una
+línea base coherente hay un backfill de una sola vez (no está en `schema.sql`
+porque `init-db` se re-aplica; ver los comentarios del archivo, incluida la
+query de preview):
+
+```bash
+psql "$DATABASE_URL" -f migrations/2026-08-04_backfill_chats_synced_at.sql
+```
+
 ## Flujo de ejecución
 
 Cada archivo le corresponde un endpoint y una responsabilidad puntual.

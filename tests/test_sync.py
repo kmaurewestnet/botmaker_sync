@@ -6,11 +6,13 @@ against a real Postgres (see README), not here."""
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import pytest
 import respx
 
 import botmaker_sync.client as client_module
+import botmaker_sync.sync.chats as chats_module
 from botmaker_sync.client import BotmakerClient
-from botmaker_sync.db import resolve_window
+from botmaker_sync.db import resolve_window, upsert_rows
 from botmaker_sync.models import ChatModel, SessionModel
 from botmaker_sync.sync.chats import _row as chat_row
 from botmaker_sync.sync.contacts import sync_contacts
@@ -114,9 +116,10 @@ def test_session_row_pulls_refs_and_variables_from_nested_chat():
 
 
 class _FakeCursor:
-    def __init__(self, value, rows=None):
+    def __init__(self, value, rows=None, sql_log=None):
         self._value = value
         self._rows = rows or []
+        self._sql_log = sql_log if sql_log is not None else []
 
     def __enter__(self):
         return self
@@ -124,11 +127,11 @@ class _FakeCursor:
     def __exit__(self, *exc_info):
         return False
 
-    def execute(self, *args, **kwargs):
-        pass
+    def execute(self, sql=None, *args, **kwargs):
+        self._sql_log.append(sql)
 
-    def executemany(self, *args, **kwargs):
-        pass
+    def executemany(self, sql=None, *args, **kwargs):
+        self._sql_log.append(sql)
 
     def fetchall(self):
         return self._rows
@@ -141,9 +144,10 @@ class _FakeConn:
     def __init__(self, watermark=None, rows=None):
         self._watermark = watermark
         self._rows = rows or []
+        self.sql_log = []
 
     def cursor(self):
-        return _FakeCursor(self._watermark, self._rows)
+        return _FakeCursor(self._watermark, self._rows, self.sql_log)
 
     def commit(self):
         pass
@@ -167,6 +171,59 @@ def test_resolve_window_explicit_range_bypasses_watermark():
 def test_resolve_window_first_run_has_no_lower_bound():
     since, _ = resolve_window(_FakeConn(None), "chats", None, None)
     assert since is None
+
+
+def test_upsert_gates_synced_at_without_gating_the_data_columns():
+    """The CASE must leave the plain `col = EXCLUDED.col` sets unconditional --
+    an `ON CONFLICT ... WHERE` would skip the whole UPDATE and stop refreshing
+    queue_id/agent_id on chats whose timestamps didn't move."""
+    conn = _FakeConn()
+    upsert_rows(
+        conn,
+        "chats",
+        [{"chat_id": "c1", "queue_id": "q1", "last_user_message_at": None}],
+        pk_cols=["chat_id"],
+        synced_at_on=["last_user_message_at"],
+    )
+    sql = conn.sql_log[0]
+    assert "queue_id = EXCLUDED.queue_id" in sql
+    assert (
+        "synced_at = CASE WHEN (chats.last_user_message_at)"
+        " IS DISTINCT FROM (EXCLUDED.last_user_message_at)"
+        " THEN now() ELSE chats.synced_at END" in sql
+    )
+    assert "WHERE" not in sql
+
+
+def test_upsert_without_synced_at_on_leaves_synced_at_untouched():
+    """Full-sweep tables (channels/agents/contacts) keep first-seen semantics."""
+    conn = _FakeConn()
+    upsert_rows(conn, "agents", [{"id": "a1", "is_online": True}], pk_cols=["id"])
+    assert "synced_at" not in conn.sql_log[0]
+
+
+def test_upsert_rejects_synced_at_on_column_missing_from_the_row():
+    conn = _FakeConn()
+    with pytest.raises(ValueError, match="last_user_message_at"):
+        upsert_rows(
+            conn,
+            "chats",
+            [{"chat_id": "c1", "queue_id": "q1"}],
+            pk_cols=["chat_id"],
+            synced_at_on=["last_user_message_at"],
+        )
+
+
+def test_sync_chats_passes_the_four_api_timestamps():
+    assert chats_module.SYNCED_AT_ON == [
+        "creation_time",
+        "last_session_creation_time",
+        "whatsapp_window_close_at",
+        "last_user_message_at",
+    ]
+    # every gating column must exist in the row mapping, or the upsert raises
+    row = chat_row(ChatModel.model_validate({"chat": {"chatId": "ch1"}}))
+    assert all(c in row for c in chats_module.SYNCED_AT_ON)
 
 
 @respx.mock

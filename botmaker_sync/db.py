@@ -39,10 +39,24 @@ def init_db(conn: psycopg.Connection) -> None:
     conn.commit()
 
 
-def upsert_rows(conn: psycopg.Connection, table: str, rows: list[dict], pk_cols: list[str]) -> None:
-    """INSERT ... ON CONFLICT DO UPDATE. `table`/`pk_cols` are internal constants
-    (never user input), so f-string identifiers here carry no injection risk;
-    row values always go through parameterized placeholders."""
+def upsert_rows(
+    conn: psycopg.Connection,
+    table: str,
+    rows: list[dict],
+    pk_cols: list[str],
+    synced_at_on: list[str] | None = None,
+) -> None:
+    """INSERT ... ON CONFLICT DO UPDATE. `table`/`pk_cols`/`synced_at_on` are
+    internal constants (never user input), so f-string identifiers here carry no
+    injection risk; row values always go through parameterized placeholders.
+
+    `synced_at_on` names the columns whose change should advance `synced_at`.
+    It is applied as a CASE on that one column, *not* as an `ON CONFLICT ... WHERE`:
+    the WHERE form would skip the whole UPDATE, so a chat that only changed
+    queue_id/agent_id would stop being refreshed. Data columns always update;
+    only synced_at is gated. Omit the argument for tables where synced_at should
+    keep its first-seen semantics (channels/agents/contacts are full sweeps —
+    now() there would just stamp every row with the cron time, see README)."""
     if not rows:
         return
     columns = list(rows[0].keys())
@@ -50,8 +64,18 @@ def upsert_rows(conn: psycopg.Connection, table: str, rows: list[dict], pk_cols:
     placeholders = ", ".join(f"%({c})s" for c in columns)
     update_cols = [c for c in columns if c not in pk_cols]
     if update_cols:
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
-        conflict_clause = f"ON CONFLICT ({', '.join(pk_cols)}) DO UPDATE SET {set_clause}"
+        sets = [f"{c} = EXCLUDED.{c}" for c in update_cols]
+        if synced_at_on:
+            missing = [c for c in synced_at_on if c not in columns]
+            if missing:
+                raise ValueError(f"{table}: synced_at_on columns not in row: {', '.join(missing)}")
+            old = ", ".join(f"{table}.{c}" for c in synced_at_on)
+            new = ", ".join(f"EXCLUDED.{c}" for c in synced_at_on)
+            sets.append(
+                f"synced_at = CASE WHEN ({old}) IS DISTINCT FROM ({new})"
+                f" THEN now() ELSE {table}.synced_at END"
+            )
+        conflict_clause = f"ON CONFLICT ({', '.join(pk_cols)}) DO UPDATE SET {', '.join(sets)}"
     else:
         conflict_clause = f"ON CONFLICT ({', '.join(pk_cols)}) DO NOTHING"
     sql = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) {conflict_clause}"

@@ -129,6 +129,11 @@ CREATE TABLE IF NOT EXISTS contact_chats (
 
 -- ===== chats =====
 -- Incremental by last activity (`from`/`to` on GET /chats).
+-- synced_at here means "last time an API timestamp on this chat changed" (see
+-- SYNCED_AT_ON in sync/chats.py), not "last time the cron looked at it" -- the
+-- 5-min window overlap re-fetches unchanged chats every run. On the other
+-- tables synced_at is still first-seen: they're full sweeps, so now() would
+-- stamp every row with the cron time and carry no information.
 CREATE TABLE IF NOT EXISTS chats (
     chat_id                  text PRIMARY KEY,
     channel_id               text,

@@ -10,6 +10,17 @@ from botmaker_sync.models import ChatModel, ChatsPage
 
 TABLE = "chats"
 
+# synced_at advances only when one of the API's own timestamps moved. The chats
+# window is by last activity with a 5-min overlap, so the same chat is re-fetched
+# on consecutive runs; stamping now() unconditionally would turn synced_at into
+# "last time the cron saw it" instead of "last time the conversation moved".
+SYNCED_AT_ON = [
+    "creation_time",
+    "last_session_creation_time",
+    "whatsapp_window_close_at",
+    "last_user_message_at",
+]
+
 
 def _row(item: ChatModel) -> dict | None:
     ref = item.chat
@@ -52,7 +63,7 @@ def sync_chats(
     for page in client.get_pages("/chats", params=params):
         parsed = ChatsPage.model_validate(page)
         rows = [row for item in parsed.items if (row := _row(item)) is not None]
-        upsert_rows(conn, TABLE, rows, pk_cols=["chat_id"])
+        upsert_rows(conn, TABLE, rows, pk_cols=["chat_id"], synced_at_on=SYNCED_AT_ON)
         for item in parsed.items:
             if item.chat is None or not item.chat.chat_id:
                 continue
