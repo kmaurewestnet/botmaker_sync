@@ -105,7 +105,7 @@ cron/Task Scheduler si querés que sea automático:
 | channels | `GET /channels` | refresh completo en cada corrida (sin filtro de tiempo) |
 | agents | `GET /agents` | refresh completo en cada corrida (sin filtro de tiempo) |
 | chats | `GET /chats` | incremental, `from`/`to` por última actividad |
-| sessions | `GET /sessions` | incremental, `from`/`to` por inicio de sesión, incluye mensajes/variables/eventos. El `from` se extiende hasta la sesión abierta más vieja, con tope de 25 días |
+| sessions | `GET /sessions` | incremental, `from`/`to` por inicio de sesión, incluye mensajes/variables/eventos. El `from` se extiende hasta la sesión abierta más vieja, con tope de 2 días |
 | contacts | `GET /contacts?channel-id=...` | **acotado**: solo contactos referenciados por los chats de esta corrida |
 
 Las entidades incrementales (`chats`, `sessions`) guardan un watermark por
@@ -145,13 +145,32 @@ No significa lo mismo en todas las tablas:
 duración o abandono tiene que filtrar por `closed_reason`, o va a tratar como
 cierres reales lo que son suposiciones nuestras.
 
-Existe porque sin `long-term-search` la API deja de devolver sesiones pasada su
-ventana: si una sesión se cierra después de eso, nunca podemos verlo. Dejarlas
-abiertas para siempre no es gratis — el sync extiende el `from` hasta la sesión
-abierta más vieja, así que una sola sesión colgada ensancha la ventana de todas
-las corridas hasta pasarse del límite de la API. `OPEN_SESSION_LOOKBACK`
-(`sync/sessions.py`, 25 días) topea ese alcance, y lo que queda afuera se cierra
-con `'window_expired'` al final de cada corrida.
+Existe porque una parte grande de las conversaciones **nunca recibe
+`conversation-close`**: se abandonan y Botmaker las deja abiertas para siempre
+(medido el 2026-08-04: ~17 mil sesiones en ese estado). Dejarlas abiertas de
+nuestro lado no es gratis, porque el sync extiende el `from` hasta la sesión
+abierta más vieja: una sola sesión colgada ensancha la ventana de *todas* las
+corridas, y con una población permanente de abandonadas eso no es un pico sino
+el estado estable.
+
+`OPEN_SESSION_LOOKBACK` (`sync/sessions.py`, 2 días) topea ese alcance. El valor
+sale de medir, no de estimar: sobre 23801 cierres observados, el 98.8% ocurrió
+dentro de 1 día del inicio de la sesión y el **100% dentro de 2 días** — nunca
+se vio uno más tarde. Ampliar la ventana no recupera ni un cierre más y sí
+multiplica el costo de BI (con 25 días eran ~30 mil sesiones con mensajes,
+eventos y variables cada 15 minutos). Lo que queda afuera del tope se cierra con
+`'window_expired'` al final de cada corrida.
+
+Si el patrón de uso cambia, esa medición se rehace con:
+
+```sql
+SELECT count(*) FILTER (WHERE e.creation_time - s.creation_time < interval '1 day') AS en_1d,
+       count(*) FILTER (WHERE e.creation_time - s.creation_time < interval '2 days') AS en_2d,
+       count(*) AS total
+FROM sessions s
+JOIN session_events e ON e.session_id = s.id AND e.name = 'conversation-close'
+WHERE NOT s.is_open;
+```
 
 Los chats que ya estaban en la tabla antes de este cambio arrastran su
 `synced_at` de primera vez hasta que vuelvan a tener actividad. Para dejar una
@@ -229,11 +248,12 @@ Por archivo:
   defecto (~1 día). Hay que correr el sync con la frecuencia suficiente para
   que ningún hueco supere el mes, o aceptar huecos si se salta un período.
 - **Sesiones abandonadas**: una sesión sin evento `conversation-close` se
-  cierra por expiración a los 25 días (ver
+  cierra por expiración a los 2 días (ver
   [Sesiones abiertas y `closed_reason`](#sesiones-abiertas-y-closed_reason)).
-  Ese umbral tiene que ser mayor que cualquier caída esperable del cron: si el
-  sync está parado más tiempo que eso, las sesiones de ese hueco se marcan
-  `'window_expired'` sin haber sido observadas nunca.
+  Con un umbral de 2 días el margen es chico: **si el cron queda parado más de
+  48 horas**, las sesiones de ese hueco se marcan `'window_expired'` sin haber
+  sido observadas nunca, aunque hubieran cerrado de verdad. Ante una caída
+  larga, subí `OPEN_SESSION_LOOKBACK` antes de reanudar y bajalo después.
 - **Alcance de contacts**: no existe un endpoint `/contacts/{id}`, así que
   "solo contactos nuevos" se implementa así: se junta cada par
   `(channel_id, contact_id)` visto en los chats de esta corrida, y luego se

@@ -269,7 +269,7 @@ def test_sync_sessions_still_widens_for_an_open_session_inside_the_lookback():
     floor but older than `since` still pulls `from` back to it."""
     route = _sessions_route()
     until = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
-    recent_open = until - timedelta(days=3)
+    recent_open = until - sessions_module.OPEN_SESSION_LOOKBACK / 2
     since = until - timedelta(minutes=5)
     sync_sessions(BotmakerClient("tok", BASE), _FakeConn(recent_open), since, until, include_open=True)
     assert route.calls[0].request.url.params["from"] == format_datetime(recent_open)

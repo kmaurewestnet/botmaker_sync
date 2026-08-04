@@ -15,11 +15,23 @@ logger = logging.getLogger(__name__)
 
 TABLE = "sessions"
 
-# How far back the `from` extension will reach for still-open sessions. Kept
-# safely under MAX_API_RANGE: an unbounded reach is what broke this sync before
-# (a session stuck open since 2026-06-24 pushed every request to a 41-day range,
-# past the API limit -> 400 on every run, forever).
-OPEN_SESSION_LOOKBACK = timedelta(days=25)
+# How far back the `from` extension will reach for still-open sessions.
+#
+# Two days because that is where the data says the value stops: measured
+# 2026-08-04 over 23801 observed closes, 98.8% landed within 1 day of session
+# start and 100% within 2 days -- not one close was ever seen beyond that.
+# Reaching further only re-fetches the ~17k conversations Botmaker never closes
+# at all (abandoned, no conversation-close event, permanently is_open), which
+# anchors the window at the floor forever instead of transiently: a 25-day
+# lookback meant ~30k sessions with messages/events/variables every 15 minutes,
+# billed as BI, buying zero extra closes. Those sessions are handled by the
+# expiry sweep below, not by widening the request.
+#
+# An UNBOUNDED reach is what broke this sync originally: one session stuck open
+# since 2026-06-24 pushed every request to a 41-day range, past the API limit,
+# so every run 400'd -- and the retry that used to hide it made the failure look
+# like success. Any value here must stay well under MAX_API_RANGE.
+OPEN_SESSION_LOOKBACK = timedelta(days=2)
 
 # The API rejects from/to ranges wider than ~1 month unless long-term-search=true,
 # which bills BI usage and is deliberately never sent (see README).

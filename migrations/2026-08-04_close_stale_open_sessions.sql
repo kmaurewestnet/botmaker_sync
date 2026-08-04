@@ -21,7 +21,7 @@
 --   SELECT count(*) FILTER (WHERE EXISTS (
 --              SELECT 1 FROM session_events e
 --              WHERE e.session_id = s.id AND e.name = 'conversation-close')) AS cierre_perdido,
---          count(*) FILTER (WHERE creation_time < now() - interval '25 days') AS expiradas,
+--          count(*) FILTER (WHERE creation_time < now() - interval '2 days') AS expiradas,
 --          count(*) AS total_abiertas
 --   FROM sessions s WHERE s.is_open;
 
@@ -45,7 +45,7 @@ WHERE s.is_open
 UPDATE sessions
 SET is_open = false, closed_reason = 'window_expired'
 WHERE is_open
-  AND creation_time < now() - interval '25 days';
+  AND creation_time < now() - interval '2 days';
 
 -- 3. Backfill de motivo para las que ya estaban cerradas antes de existir la
 --    columna. Supuesto: hasta este cambio el ÚNICO camino a is_open=false era el
@@ -59,7 +59,7 @@ WHERE NOT is_open AND closed_reason IS NULL;
 COMMIT;
 
 -- Después de correrlo, la próxima corrida del sync debería pedir una ventana corta
--- (watermark - 5 min, o la sesión abierta más vieja dentro de los 25 días) y no
+-- (watermark - 5 min, o la sesión abierta más vieja dentro de los 2 días) y no
 -- volver a dar 400. Verificación:
 --
 --   SELECT closed_reason, count(*) FROM sessions GROUP BY 1;
