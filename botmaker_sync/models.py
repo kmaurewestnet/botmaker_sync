@@ -6,9 +6,13 @@ Botmaker adds in the future should pass through, not raise.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 
 class ApiModel(BaseModel):
@@ -181,11 +185,41 @@ class SessionsPage(ApiModel):
 
 
 # ===== dashboards / agent metrics =====
-# Every numeric field is typed `str` in the spec (counters and durations alike
-# come back quoted: "3358", "2"). They are declared int here so pydantic does
-# the coercion once, at the edge, instead of leaving text in the DB for
-# Metabase to cast on every query. A value that isn't numeric would raise, so
-# the few free-text fields (queue, typification, ...) stay str on purpose.
+def _metric_int(value: object) -> object:
+    """Every numeric field of this endpoint is typed `str` in the spec and comes
+    back quoted ("3358", "2"). Coerce once here, at the edge, so Metabase gets
+    real integers instead of text to cast on every query.
+
+    Two values are not numbers: the API sends "-" for a metric that does not
+    apply (all of them, on a still-open session) and occasionally "". Both mean
+    "no value" -> NULL.
+
+    Anything else unparseable is logged and dropped to NULL rather than raised.
+    This mirror runs unattended every 15 minutes, and a single odd value in one
+    row should not abort the whole window -- same reasoning as keeping enum-typed
+    fields as plain str above."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if text in ("", "-"):
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            logger.warning("agent metrics: dropping non-numeric value %r", value)
+            return None
+    return value
+
+
+# Optional[int], not `int | None`: this alias is evaluated at import time (the
+# module's `from __future__ import annotations` only defers annotations), and
+# the sync runs on Python 3.9 in production, where `int | None` raises.
+MetricInt = Annotated[Optional[int], BeforeValidator(_metric_int)]
+
+
+# Free-text fields (queue, typification, agentName) stay str: they can also come
+# back as "-", but that is preserved as-is rather than guessed at.
 class AgentMetricModel(ApiModel):
     session_id: str | None = Field(None, alias="sessionId")
     chat_id: str | None = Field(None, alias="chatId")
@@ -196,27 +230,27 @@ class AgentMetricModel(ApiModel):
     agent_name: str | None = Field(None, alias="agentName")
     typification: str | None = None
     conversation_link: str | None = Field(None, alias="conversationLink")
-    avg_attending_time: int | None = Field(None, alias="avgAttendingTime")
-    avg_response_time: int | None = Field(None, alias="avgResponseTime")
-    open_sessions: int | None = Field(None, alias="openSessions")
-    closed_sessions: int | None = Field(None, alias="closedSessions")
-    on_hold: int | None = Field(None, alias="onHold")
-    op_response_time: int | None = Field(None, alias="opResponseTime")
-    operator_responses: int | None = Field(None, alias="operatorResponses")
-    session_transfer_in: int | None = Field(None, alias="sessionTransferIn")
-    session_transfer_out: int | None = Field(None, alias="sessionTransferOut")
-    session_transfer_out_no_messages: int | None = Field(None, alias="sessionTransferOutNoMessages")
-    closed_with_no_messages: int | None = Field(None, alias="closedWithNoMessages")
-    timeout_no_messages: int | None = Field(None, alias="timeoutNoMessages")
-    agent_timeout: int | None = Field(None, alias="agentTimeout")
-    user_timeout: int | None = Field(None, alias="userTimeout")
-    from_queue_asign_to_op_assigned: int | None = Field(None, alias="fromQueueAsignToOpAssigned")
-    from_session_start_to_op_first_response: int | None = Field(None, alias="fromSessionStartToOpFirstResponse")
-    from_queue_asign_to_op_first_response: int | None = Field(None, alias="fromQueueAsignToOpFirstResponse")
-    from_op_assigned_to_op_first_response: int | None = Field(None, alias="fromOpAssignedToOpFirstResponse")
-    from_queue_asign_to_session_closed: int | None = Field(None, alias="fromQueueAsignToSessionClosed")
-    from_op_assignation_to_session_closed: int | None = Field(None, alias="fromOpAssignationToSessionClosed")
-    session_timeout: int | None = Field(None, alias="sessionTimeout")
+    avg_attending_time: MetricInt = Field(None, alias="avgAttendingTime")
+    avg_response_time: MetricInt = Field(None, alias="avgResponseTime")
+    open_sessions: MetricInt = Field(None, alias="openSessions")
+    closed_sessions: MetricInt = Field(None, alias="closedSessions")
+    on_hold: MetricInt = Field(None, alias="onHold")
+    op_response_time: MetricInt = Field(None, alias="opResponseTime")
+    operator_responses: MetricInt = Field(None, alias="operatorResponses")
+    session_transfer_in: MetricInt = Field(None, alias="sessionTransferIn")
+    session_transfer_out: MetricInt = Field(None, alias="sessionTransferOut")
+    session_transfer_out_no_messages: MetricInt = Field(None, alias="sessionTransferOutNoMessages")
+    closed_with_no_messages: MetricInt = Field(None, alias="closedWithNoMessages")
+    timeout_no_messages: MetricInt = Field(None, alias="timeoutNoMessages")
+    agent_timeout: MetricInt = Field(None, alias="agentTimeout")
+    user_timeout: MetricInt = Field(None, alias="userTimeout")
+    from_queue_asign_to_op_assigned: MetricInt = Field(None, alias="fromQueueAsignToOpAssigned")
+    from_session_start_to_op_first_response: MetricInt = Field(None, alias="fromSessionStartToOpFirstResponse")
+    from_queue_asign_to_op_first_response: MetricInt = Field(None, alias="fromQueueAsignToOpFirstResponse")
+    from_op_assigned_to_op_first_response: MetricInt = Field(None, alias="fromOpAssignedToOpFirstResponse")
+    from_queue_asign_to_session_closed: MetricInt = Field(None, alias="fromQueueAsignToSessionClosed")
+    from_op_assignation_to_session_closed: MetricInt = Field(None, alias="fromOpAssignationToSessionClosed")
+    session_timeout: MetricInt = Field(None, alias="sessionTimeout")
 
 
 class AgentMetricsPage(ApiModel):

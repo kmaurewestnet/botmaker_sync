@@ -528,3 +528,28 @@ def test_agent_metric_row_keys_an_unassigned_conversation_on_empty_agent():
 
 def test_agent_metric_row_skips_an_item_with_no_session_id():
     assert metric_row(AgentMetricModel.model_validate({"queue": "Ventas"}), "open") is None
+
+
+def test_agent_metric_reads_a_dash_as_no_value():
+    """What the API actually sends for a still-open session: every metric is
+    "-". Typing these as plain int aborted the whole page with 2440 errors."""
+    item = AgentMetricModel.model_validate(
+        {
+            "sessionId": "s1",
+            "agentId": "a1",
+            "avgAttendingTime": "-",
+            "onHold": "-",
+            "operatorResponses": "3",
+        }
+    )
+    assert item.avg_attending_time is None
+    assert item.on_hold is None
+    assert item.operator_responses == 3
+
+
+def test_agent_metric_drops_an_unparseable_number_instead_of_raising(caplog):
+    """A single odd value must not abort an unattended 15-minute run."""
+    with caplog.at_level("WARNING"):
+        item = AgentMetricModel.model_validate({"sessionId": "s1", "onHold": "3,5"})
+    assert item.on_hold is None
+    assert "3,5" in caplog.text
