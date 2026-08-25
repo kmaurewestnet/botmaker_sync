@@ -121,6 +121,44 @@ def test_session_row_pulls_refs_and_variables_from_nested_chat():
     assert item.chat.variables == {"plan": "pro"}
 
 
+def test_session_ai_analysis_maps_every_documented_field():
+    """The API sample block, verbatim. Today Botmaker only ever sends
+    doesNotMeetCriteria, so nothing else here is covered by live data."""
+    item = SessionModel.model_validate(
+        {
+            "id": "s1",
+            "aiAnalysis": {
+                "summary": "resumen",
+                "doesNotMeetCriteria": False,
+                "name": "analisis",
+                "justification": "porque si",
+                "aspectScores": {
+                    "conciseness": 1,
+                    "clarity": 2,
+                    "empathyTone": 3,
+                    "understanding": 4,
+                    "resolution": 5,
+                },
+                "qualityScore": 90,
+            },
+        }
+    )
+    a = item.ai_analysis
+    assert (a.summary, a.name, a.justification) == ("resumen", "analisis", "porque si")
+    assert (a.does_not_meet_criteria, a.quality_score) == (False, 90)
+    scores = a.aspect_scores
+    assert (scores.conciseness, scores.clarity, scores.empathy_tone) == (1, 2, 3)
+    assert (scores.understanding, scores.resolution) == (4, 5)
+
+
+def test_session_ai_analysis_partial_block_leaves_the_rest_none():
+    """What the API actually returns today: the flag alone, no aspectScores."""
+    item = SessionModel.model_validate({"id": "s1", "aiAnalysis": {"doesNotMeetCriteria": True}})
+    assert item.ai_analysis.does_not_meet_criteria is True
+    assert item.ai_analysis.summary is None
+    assert item.ai_analysis.aspect_scores is None
+
+
 class _FakeCursor:
     def __init__(self, value, rows=None, sql_log=None):
         self._value = value

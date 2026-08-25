@@ -14,8 +14,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# Run as `python scripts/probe_ai_analysis.py`: sys.path[0] is scripts/, not the
+# repo root, so the package wouldn't import. The package isn't pip-installed.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from botmaker_sync.client import BotmakerClient
 from botmaker_sync.config import load_settings
