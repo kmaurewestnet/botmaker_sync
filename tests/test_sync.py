@@ -10,11 +10,13 @@ import pytest
 import respx
 
 import botmaker_sync.client as client_module
+import botmaker_sync.sync.agent_metrics as agent_metrics_module
 import botmaker_sync.sync.chats as chats_module
 import botmaker_sync.sync.sessions as sessions_module
 from botmaker_sync.client import BotmakerClient, format_datetime
 from botmaker_sync.db import resolve_window, upsert_rows
-from botmaker_sync.models import ChatModel, SessionModel
+from botmaker_sync.models import AgentMetricModel, ChatModel, SessionModel
+from botmaker_sync.sync.agent_metrics import _row as metric_row, sync_agent_metrics
 from botmaker_sync.sync.chats import _row as chat_row
 from botmaker_sync.sync.contacts import sync_contacts
 from botmaker_sync.sync.sessions import _row as session_row, sync_sessions
@@ -429,3 +431,87 @@ def test_sync_contacts_full_sweep_upserts_all_items():
     # _FakeConn rows simulates SELECT id FROM channels returning one channel
     n = sync_contacts(client, _FakeConn(rows=[("cc1",)]))
     assert n == 2
+
+
+@respx.mock
+def test_sync_agent_metrics_queries_open_and_closed_over_the_same_window():
+    """session-status is required and single-valued, so both states cost one
+    request each -- and both must carry the identical from/to."""
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": []})
+
+    respx.get(f"{BASE}/dashboards/agent-metrics").mock(side_effect=handler)
+    since = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    until = since + timedelta(minutes=15)
+    sync_agent_metrics(BotmakerClient("t", BASE), _FakeConn(), since, until)
+
+    assert [p["session-status"] for p in seen] == ["open", "closed"]
+    assert {p["from"] for p in seen} == {format_datetime(since)}
+    assert {p["to"] for p in seen} == {format_datetime(until)}
+
+
+@respx.mock
+def test_sync_agent_metrics_sends_no_queue_or_channel_filter():
+    """Omitting both filters is what makes the API return every queue and
+    channel; sending either would silently narrow the mirror."""
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": []})
+
+    respx.get(f"{BASE}/dashboards/agent-metrics").mock(side_effect=handler)
+    since = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    sync_agent_metrics(BotmakerClient("t", BASE), _FakeConn(), since, since + timedelta(minutes=15))
+
+    for params in seen:
+        assert "queues" not in params and "channel-ids" not in params
+
+
+@respx.mock
+def test_sync_agent_metrics_omits_to_when_there_is_no_since():
+    """The API rejects `to` without `from`, so the first run (no watermark yet)
+    must send neither and accept the API's own default window."""
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": []})
+
+    respx.get(f"{BASE}/dashboards/agent-metrics").mock(side_effect=handler)
+    sync_agent_metrics(BotmakerClient("t", BASE), _FakeConn(), None, datetime.now(timezone.utc))
+
+    for params in seen:
+        assert "from" not in params and "to" not in params
+
+
+def test_agent_metric_row_coerces_quoted_numbers_and_keeps_the_status():
+    item = AgentMetricModel.model_validate(
+        {
+            "sessionId": "s1",
+            "agentId": "a1",
+            "chatId": "c1",
+            "queue": "Customer Service",
+            "avgAttendingTime": "3358",
+            "operatorResponses": "5",
+            "fromOpAssignedToOpFirstResponse": "615",
+        }
+    )
+    row = metric_row(item, "closed")
+    assert (row["session_id"], row["agent_id"], row["session_status"]) == ("s1", "a1", "closed")
+    assert row["avg_attending_time"] == 3358
+    assert row["operator_responses"] == 5
+    assert row["from_op_assigned_to_op_first_response"] == 615
+
+
+def test_agent_metric_row_keys_an_unassigned_conversation_on_empty_agent():
+    """agent_id is half the PK, and a PK column cannot be NULL."""
+    item = AgentMetricModel.model_validate({"sessionId": "s1", "queue": "Ventas"})
+    assert metric_row(item, "open")["agent_id"] == ""
+
+
+def test_agent_metric_row_skips_an_item_with_no_session_id():
+    assert metric_row(AgentMetricModel.model_validate({"queue": "Ventas"}), "open") is None

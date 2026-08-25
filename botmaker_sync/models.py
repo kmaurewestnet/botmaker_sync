@@ -178,3 +178,46 @@ class SessionModel(ApiModel):
 
 class SessionsPage(ApiModel):
     items: list[SessionModel] = Field(default_factory=list)
+
+
+# ===== dashboards / agent metrics =====
+# Every numeric field is typed `str` in the spec (counters and durations alike
+# come back quoted: "3358", "2"). They are declared int here so pydantic does
+# the coercion once, at the edge, instead of leaving text in the DB for
+# Metabase to cast on every query. A value that isn't numeric would raise, so
+# the few free-text fields (queue, typification, ...) stay str on purpose.
+class AgentMetricModel(ApiModel):
+    session_id: str | None = Field(None, alias="sessionId")
+    chat_id: str | None = Field(None, alias="chatId")
+    session_creation_time: datetime | None = Field(None, alias="sessionCreationTime")
+    closed_time: datetime | None = Field(None, alias="closedTime")
+    queue: str | None = None
+    agent_id: str | None = Field(None, alias="agentId")
+    agent_name: str | None = Field(None, alias="agentName")
+    typification: str | None = None
+    conversation_link: str | None = Field(None, alias="conversationLink")
+    avg_attending_time: int | None = Field(None, alias="avgAttendingTime")
+    avg_response_time: int | None = Field(None, alias="avgResponseTime")
+    open_sessions: int | None = Field(None, alias="openSessions")
+    closed_sessions: int | None = Field(None, alias="closedSessions")
+    on_hold: int | None = Field(None, alias="onHold")
+    op_response_time: int | None = Field(None, alias="opResponseTime")
+    operator_responses: int | None = Field(None, alias="operatorResponses")
+    session_transfer_in: int | None = Field(None, alias="sessionTransferIn")
+    session_transfer_out: int | None = Field(None, alias="sessionTransferOut")
+    session_transfer_out_no_messages: int | None = Field(None, alias="sessionTransferOutNoMessages")
+    closed_with_no_messages: int | None = Field(None, alias="closedWithNoMessages")
+    timeout_no_messages: int | None = Field(None, alias="timeoutNoMessages")
+    agent_timeout: int | None = Field(None, alias="agentTimeout")
+    user_timeout: int | None = Field(None, alias="userTimeout")
+    from_queue_asign_to_op_assigned: int | None = Field(None, alias="fromQueueAsignToOpAssigned")
+    from_session_start_to_op_first_response: int | None = Field(None, alias="fromSessionStartToOpFirstResponse")
+    from_queue_asign_to_op_first_response: int | None = Field(None, alias="fromQueueAsignToOpFirstResponse")
+    from_op_assigned_to_op_first_response: int | None = Field(None, alias="fromOpAssignedToOpFirstResponse")
+    from_queue_asign_to_session_closed: int | None = Field(None, alias="fromQueueAsignToSessionClosed")
+    from_op_assignation_to_session_closed: int | None = Field(None, alias="fromOpAssignationToSessionClosed")
+    session_timeout: int | None = Field(None, alias="sessionTimeout")
+
+
+class AgentMetricsPage(ApiModel):
+    items: list[AgentMetricModel] = Field(default_factory=list)

@@ -257,6 +257,58 @@ CREATE TABLE IF NOT EXISTS session_ai_analysis (
     aspect_resolution      integer
 );
 
+-- ===== dashboards / agent metrics =====
+-- One row per (session, agent) from /dashboards/agent-metrics: a transferred
+-- conversation is reported once per agent that handled it, so session_id alone
+-- would collapse those into one row. agent_id is '' (not NULL) when the API
+-- sends no agent, because a PK column cannot be nullable.
+--
+-- session_status is a data column, NOT part of the key: a session first seen
+-- 'open' and later 'closed' must update in place, not leave a stale open row.
+--
+-- Soft ref to sessions(id), no FK: metrics are fetched in their own time window
+-- and can arrive for a session this mirror hasn't synced yet.
+CREATE TABLE IF NOT EXISTS agent_metrics (
+    session_id            text NOT NULL,
+    agent_id              text NOT NULL DEFAULT '',
+    chat_id               text,
+    session_creation_time timestamptz,
+    closed_time           timestamptz,
+    session_status        text, -- 'open' | 'closed', from the request that returned the row
+    queue                 text,
+    agent_name            text,
+    typification          text,
+    conversation_link     text,
+    -- durations, seconds
+    avg_attending_time    integer,
+    avg_response_time     integer,
+    op_response_time      integer,
+    from_queue_asign_to_op_assigned         integer,
+    from_session_start_to_op_first_response integer,
+    from_queue_asign_to_op_first_response   integer,
+    from_op_assigned_to_op_first_response   integer,
+    from_queue_asign_to_session_closed      integer,
+    from_op_assignation_to_session_closed   integer,
+    -- counters
+    open_sessions                    integer,
+    closed_sessions                  integer,
+    on_hold                          integer,
+    operator_responses               integer,
+    session_transfer_in              integer,
+    session_transfer_out             integer,
+    session_transfer_out_no_messages integer,
+    closed_with_no_messages          integer,
+    timeout_no_messages              integer,
+    agent_timeout                    integer,
+    user_timeout                     integer,
+    session_timeout                  integer,
+    synced_at             timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (session_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_metrics_creation_time ON agent_metrics(session_creation_time);
+CREATE INDEX IF NOT EXISTS idx_agent_metrics_agent_id ON agent_metrics(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_metrics_queue ON agent_metrics(queue);
+
 -- ===== sync watermark state =====
 CREATE TABLE IF NOT EXISTS sync_state (
     entity         text PRIMARY KEY,

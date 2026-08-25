@@ -65,7 +65,8 @@ cron/Task Scheduler si querés que sea automático:
 ### `--entities` y `--since`/`--until`: cómo funcionan
 
 - **`--entities`**: lista separada por comas, subconjunto de
-  `channels,agents,chats,sessions`. Filtra qué bloques de `cmd_run` corren.
+  `channels,agents,chats,sessions,agent_metrics`. Filtra qué bloques de
+  `cmd_run` corren.
   `contacts` no es un entity propio -- se sincroniza automáticamente como
   parte de `chats` (`__main__.py` llama `sync_contacts` inmediatamente
   después de `sync_chats`, con el set de chats tocados en esa misma
@@ -106,9 +107,11 @@ cron/Task Scheduler si querés que sea automático:
 | agents | `GET /agents` | refresh completo en cada corrida (sin filtro de tiempo) |
 | chats | `GET /chats` | incremental, `from`/`to` por última actividad |
 | sessions | `GET /sessions` | incremental, `from`/`to` por inicio de sesión, incluye mensajes/variables/eventos. El `from` se extiende hasta la sesión abierta más vieja, con tope de 2 días |
+| agent_metrics | `GET /dashboards/agent-metrics` | incremental, `from`/`to` por inicio de sesión. Dos llamadas por corrida (`session-status=open` y `=closed`), sin filtro de cola ni de canal |
 | contacts | `GET /contacts?channel-id=...` | **acotado**: solo contactos referenciados por los chats de esta corrida |
 
-Las entidades incrementales (`chats`, `sessions`) guardan un watermark por
+Las entidades incrementales (`chats`, `sessions`, `agent_metrics`) guardan un
+watermark por
 entidad en `sync_state`. El `to` de cada corrida se vuelve el `from` de la
 siguiente, menos un solapamiento de 5 minutos para que el upsert absorba
 duplicados de borde. Pasar `--since` y/o `--until` explícitamente cambia a un
@@ -181,6 +184,25 @@ query de preview):
 ```bash
 psql "$DATABASE_URL" -f migrations/2026-08-04_backfill_chats_synced_at.sql
 ```
+
+### agent_metrics: por qué solo la ventana de la corrida
+
+`session-status` es obligatorio en `/dashboards/agent-metrics` y sus valores
+documentados son un estado a la vez, así que cada corrida hace dos llamadas
+(`open` y `closed`) sobre la misma ventana. La descripción del endpoint
+menciona un valor `both`, pero no figura en los ejemplos del parámetro y no
+está verificado contra la API real.
+
+`queues` y `channel-ids` no se mandan a propósito: los dos son filtros, y
+omitirlos es lo que trae todas las colas y todos los canales.
+
+El `from`/`to` filtra por **inicio de sesión**, no por cierre. Una conversación
+que arranca en una ventana y cierra en otra posterior queda con las métricas
+que se vieron mientras su `sessionCreationTime` seguía dentro del rango
+consultado; después de eso, el lado cerrado no se vuelve a pedir. Se evaluó
+cubrirlo con un repaso diario o con un lookback por corrida (como el de
+`sessions`) y se descartó: los dos multiplican el consumo de BI data sources,
+que este endpoint factura igual que `/sessions`.
 
 ## Flujo de ejecución
 

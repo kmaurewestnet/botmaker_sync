@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from botmaker_sync.client import BotmakerClient
 from botmaker_sync.config import load_settings
 from botmaker_sync.db import connect, init_db, resolve_window, set_watermark
+from botmaker_sync.sync.agent_metrics import sync_agent_metrics
 from botmaker_sync.sync.agents import sync_agents
 from botmaker_sync.sync.channels import sync_channels
 from botmaker_sync.sync.chats import sync_chats
@@ -17,7 +18,7 @@ from botmaker_sync.sync.sessions import sync_sessions
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("botmaker_sync")
 
-ALL_ENTITIES = ["channels", "agents", "chats", "sessions", "contacts"]
+ALL_ENTITIES = ["channels", "agents", "chats", "sessions", "agent_metrics", "contacts"]
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -76,6 +77,15 @@ def cmd_run(args: argparse.Namespace) -> None:
             logger.info("sessions: %d upserted", n)
             if not manual_range:
                 set_watermark(conn, "sessions", until)
+                conn.commit()
+
+        if "agent_metrics" in entities:
+            since, until = resolve_window(conn, "agent_metrics", args.since, args.until)
+            logger.info("agent_metrics: window %s -> %s", since, until)
+            n = sync_agent_metrics(client, conn, since, until)
+            logger.info("agent_metrics: %d upserted", n)
+            if not manual_range:
+                set_watermark(conn, "agent_metrics", until)
                 conn.commit()
 
         if "contacts" in entities:
