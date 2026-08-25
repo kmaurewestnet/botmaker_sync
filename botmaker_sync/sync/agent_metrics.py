@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg
 
@@ -21,7 +21,22 @@ PATH = "/dashboards/agent-metrics"
 SESSION_STATUSES = ("open", "closed")
 
 # `queues` and `channel-ids` are deliberately not sent: both are filters, and
-# omitting them is what returns every queue and every channel.
+# omitting them is what returns every queue and every channel. Verified against
+# the live API on 2026-08-25: the same window returned an identical 41 items
+# with and without an explicit list of all 21 channel ids.
+
+# `from` is documented as optional ("defaults to the last hour"). It is not.
+# Omitting it makes the API default `from` to roughly 100 days back and `to` to
+# now, which then trips its own range limit:
+#   400 INVALID_DATETIME_INTERVAL -- "The difference between 'from' and 'to'
+#   cannot be greater than 1 month"
+# So the first run, before any watermark exists, has to supply its own lower
+# bound instead of letting the API pick one.
+FIRST_RUN_WINDOW = timedelta(hours=1)
+
+# Undocumented for this endpoint, but enforced by it (see above) and the same
+# limit /sessions applies.
+MAX_API_RANGE = timedelta(days=30)
 
 
 def _row(item: AgentMetricModel, session_status: str) -> dict | None:
@@ -77,14 +92,16 @@ def sync_agent_metrics(
     original creation time, so its final metrics land in whichever run still
     covers that timestamp -- past that, the closed-side numbers stay as last
     seen. Widening the window would fix that at a BI cost per run, and was
-    weighed and declined; see README.
+    weighed and declined; see README."""
+    if since is None:
+        since = until - FIRST_RUN_WINDOW
+    if until - since > MAX_API_RANGE:
+        raise ValueError(
+            f"agent_metrics: requested range {until - since} exceeds the API limit of "
+            f"{MAX_API_RANGE}. Narrow --since/--until."
+        )
 
-    `to` without `from` is rejected by the API, so the first run (no watermark
-    yet) sends neither and takes the API default of the last hour."""
-    params_base: dict[str, str] = {}
-    if since is not None:
-        params_base["from"] = format_datetime(since)
-        params_base["to"] = format_datetime(until)
+    params_base = {"from": format_datetime(since), "to": format_datetime(until)}
 
     count = 0
     for status in SESSION_STATUSES:

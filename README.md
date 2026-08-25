@@ -196,6 +196,15 @@ está verificado contra la API real.
 `queues` y `channel-ids` no se mandan a propósito: los dos son filtros, y
 omitirlos es lo que trae todas las colas y todos los canales.
 
+`from` figura como opcional en el spec ("defaults to the last hour"), pero no
+lo es: omitirlo hace que la API use ~100 días atrás como límite inferior y
+después rechace el rango con
+`400 INVALID_DATETIME_INTERVAL -- cannot be greater than 1 month`. Por eso la
+primera corrida, cuando todavía no hay watermark, manda su propio `from` de una
+hora atrás en vez de dejar que la API elija. Ese límite de 1 mes tampoco está
+documentado para este endpoint: se valida antes de gastar la llamada, igual que
+en `sessions`.
+
 El `from`/`to` filtra por **inicio de sesión**, no por cierre. Una conversación
 que arranca en una ventana y cierra en otra posterior queda con las métricas
 que se vieron mientras su `sessionCreationTime` seguía dentro del rango

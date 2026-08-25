@@ -472,9 +472,9 @@ def test_sync_agent_metrics_sends_no_queue_or_channel_filter():
 
 
 @respx.mock
-def test_sync_agent_metrics_omits_to_when_there_is_no_since():
-    """The API rejects `to` without `from`, so the first run (no watermark yet)
-    must send neither and accept the API's own default window."""
+def test_sync_agent_metrics_supplies_its_own_from_on_the_first_run():
+    """Letting the API pick the lower bound is a 400: it defaults `from` to
+    ~100 days back and then rejects the range as wider than its 1-month limit."""
     seen = []
 
     def handler(request):
@@ -482,10 +482,23 @@ def test_sync_agent_metrics_omits_to_when_there_is_no_since():
         return httpx.Response(200, json={"items": []})
 
     respx.get(f"{BASE}/dashboards/agent-metrics").mock(side_effect=handler)
-    sync_agent_metrics(BotmakerClient("t", BASE), _FakeConn(), None, datetime.now(timezone.utc))
+    until = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    sync_agent_metrics(BotmakerClient("t", BASE), _FakeConn(), None, until)
 
+    assert seen, "no request was made"
     for params in seen:
-        assert "from" not in params and "to" not in params
+        assert params["to"] == format_datetime(until)
+        assert params["from"] == format_datetime(until - agent_metrics_module.FIRST_RUN_WINDOW)
+
+
+def test_sync_agent_metrics_rejects_a_range_wider_than_the_api_limit():
+    """Fail before spending the call, so the watermark is never advanced past a
+    window that was never actually fetched."""
+    until = datetime(2026, 8, 25, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="exceeds the API limit"):
+        sync_agent_metrics(
+            BotmakerClient("t", BASE), _FakeConn(), until - timedelta(days=45), until
+        )
 
 
 def test_agent_metric_row_coerces_quoted_numbers_and_keeps_the_status():
