@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator
 from datetime import datetime, timezone
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 BACKOFF_SECONDS = 1.0
@@ -53,6 +56,14 @@ class BotmakerClient:
                     if retry_after:
                         wait = float(retry_after)
                 else:
+                    if resp.is_client_error:
+                        # httpx's HTTPStatusError carries only the status line;
+                        # Botmaker explains *which* param it rejected in the
+                        # body, and without this that explanation is lost.
+                        logger.error(
+                            "%s from %s params=%s body=%s",
+                            resp.status_code, url, params, resp.text[:500],
+                        )
                     resp.raise_for_status()
                     return resp.json()
             if attempt < MAX_RETRIES:
