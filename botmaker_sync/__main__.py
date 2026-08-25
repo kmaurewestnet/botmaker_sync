@@ -69,7 +69,6 @@ def cmd_run(args: argparse.Namespace) -> None:
                 since,
                 until,
                 include_open=args.include_open_sessions,
-                include_ai_analysis=args.include_ai_analysis,
                 # An ad-hoc range must not mutate global is_open state, same
                 # reason it doesn't advance the watermark.
                 close_expired=not manual_range,
@@ -97,7 +96,6 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--since", type=_parse_datetime, default=None, help="ISO datetime; overrides the watermark and is not persisted. Ranges wider than 30 days are rejected (API limit)")
     run_parser.add_argument("--until", type=_parse_datetime, default=None, help="ISO datetime; defaults to now()")
     run_parser.add_argument("--entities", default=None, help=f"Comma-separated subset of {ALL_ENTITIES} (default: all except contacts)")
-    run_parser.add_argument("--include-ai-analysis", action="store_true")
     run_parser.add_argument("--no-open-sessions", dest="include_open_sessions", action="store_false",
                             help="Exclude ongoing open sessions (default: include them)")
     run_parser.set_defaults(func=cmd_run, include_open_sessions=True)

@@ -50,9 +50,9 @@ python -m botmaker_sync run --since 2026-01-01T00:00:00 --until 2026-01-02T00:00
 # Solo algunas entidades:
 python -m botmaker_sync run --entities channels,agents
 
-# Incluir análisis de IA de la conversación (las sesiones abiertas ya vienen
-# por defecto; usá --no-open-sessions para excluirlas):
-python -m botmaker_sync run --include-ai-analysis
+# Las sesiones abiertas y el análisis de IA vienen por defecto;
+# usá --no-open-sessions para excluir las abiertas:
+python -m botmaker_sync run --no-open-sessions
 ```
 
 Corré el comando de nuevo cada vez que quieras datos nuevos -- con un

@@ -99,7 +99,6 @@ def sync_sessions(
     since: datetime | None,
     until: datetime,
     include_open: bool = False,
-    include_ai_analysis: bool = False,
     close_expired: bool = True,
 ) -> int:
     """Incremental by session start time. A session's 'final variable state'
@@ -117,6 +116,7 @@ def sync_sessions(
         "include-messages": "true",
         "include-variables": "true",
         "include-events": "true",
+        "include-ai-analysis": "true",
     }
     if since is not None:
         params["from"] = format_datetime(since)
@@ -141,9 +141,6 @@ def sync_sessions(
             current_from = since or datetime.min.replace(tzinfo=timezone.utc)
             if earliest_open < current_from:
                 params["from"] = format_datetime(earliest_open)
-    if include_ai_analysis:
-        params["include-ai-analysis"] = "true"
-
     count = 0
     # No retry-on-400 here. There used to be one that dropped 'from' and retried,
     # blaming container clock skew; the real cause was the unbounded lookback
@@ -182,7 +179,7 @@ def sync_sessions(
                 var_rows = [{"session_id": session_id, "key": k, "value": v} for k, v in variables.items()]
                 replace_children(conn, "session_variables", "session_id", session_id, var_rows)
 
-                if include_ai_analysis and item.ai_analysis is not None:
+                if item.ai_analysis is not None:
                     a = item.ai_analysis
                     scores = a.aspect_scores
                     upsert_rows(

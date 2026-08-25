@@ -240,7 +240,8 @@ CREATE TABLE IF NOT EXISTS session_variables (
     PRIMARY KEY (session_id, key)
 );
 
--- Only populated when sync runs with --include-ai-analysis.
+-- Populated from /sessions?include-ai-analysis=true (always on); sessions the
+-- API returns without an aiAnalysis block simply get no row.
 -- aspectScores is a small fixed-shape object -> flattened to real columns.
 CREATE TABLE IF NOT EXISTS session_ai_analysis (
     session_id             text PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
