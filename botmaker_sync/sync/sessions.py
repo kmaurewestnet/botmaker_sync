@@ -179,7 +179,9 @@ def sync_sessions(
                 var_rows = [{"session_id": session_id, "key": k, "value": v} for k, v in variables.items()]
                 replace_children(conn, "session_variables", "session_id", session_id, var_rows)
 
-                if item.ai_analysis is not None:
+                # has_content(), not `is not None`: an empty block carries
+                # nothing and would only add an indistinguishable NULL row.
+                if item.ai_analysis is not None and item.ai_analysis.has_content():
                     a = item.ai_analysis
                     upsert_rows(
                         conn,

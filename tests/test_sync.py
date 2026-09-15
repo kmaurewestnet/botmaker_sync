@@ -632,3 +632,32 @@ def test_scrub_leaves_clean_rows_untouched():
     scrubbed = db_module._scrub_rows("session_messages", [row])[0]
     assert scrubbed["content"] is payload
     assert scrubbed["from_role"] is row["from_role"]
+
+
+def test_empty_ai_analysis_block_has_no_content():
+    """`aiAnalysis: {}` -- what the API returned all through the outage."""
+    item = SessionModel.model_validate({"id": "s1", "aiAnalysis": {}})
+    assert item.ai_analysis.has_content() is False
+
+
+def test_does_not_meet_criteria_alone_counts_as_content():
+    """It records that Botmaker declined to score the conversation, which is
+    not the same as never having analysed it."""
+    item = SessionModel.model_validate({"id": "s1", "aiAnalysis": {"doesNotMeetCriteria": True}})
+    assert item.ai_analysis.has_content() is True
+
+
+def test_aspect_scores_alone_count_as_content():
+    item = SessionModel.model_validate(
+        {"id": "s1", "aiAnalysis": {"aspectScores": {"clarity": {"result": 40, "weight": 20}}}}
+    )
+    assert item.ai_analysis.has_content() is True
+
+
+@respx.mock
+def test_sync_sessions_writes_no_row_for_an_empty_analysis_block():
+    _sessions_route({"items": [{"id": "s1", "aiAnalysis": {}}]})
+    conn = _FakeConn()
+    until = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+    sync_sessions(BotmakerClient("t", BASE), conn, until - timedelta(minutes=5), until)
+    assert "session_ai_analysis" not in " ".join(str(q) for q in conn.sql_log)

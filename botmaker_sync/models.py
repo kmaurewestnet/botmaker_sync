@@ -193,6 +193,25 @@ class SessionAiAnalysisModel(ApiModel):
     aspect_scores: AspectScores = Field(None, alias="aspectScores")
     quality_score: int | None = Field(None, alias="qualityScore")
 
+    def has_content(self) -> bool:
+        """False for the empty `aiAnalysis: {}` block. During the outage that
+        had this feature returning nothing, those produced ~20k all-NULL rows
+        that a LEFT JOIN cannot tell apart from a session nobody analysed.
+
+        `doesNotMeetCriteria` alone DOES count as content: it records that
+        Botmaker looked at the conversation and declined to score it, which is
+        different from never having been analysed."""
+        return any(
+            value is not None
+            for value in (
+                self.summary,
+                self.does_not_meet_criteria,
+                self.name,
+                self.justification,
+                self.quality_score,
+            )
+        ) or bool(self.aspect_scores)
+
 
 class SessionModel(ApiModel):
     id: str | None = None
