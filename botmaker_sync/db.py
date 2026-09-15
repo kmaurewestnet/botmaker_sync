@@ -4,7 +4,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import logging
+
 import psycopg
+from psycopg.types.json import Jsonb
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 OVERLAP = timedelta(minutes=5)
@@ -39,6 +44,45 @@ def init_db(conn: psycopg.Connection) -> None:
     conn.commit()
 
 
+NUL = chr(0)  # 0x00; written as chr() so the source itself stays NUL-free
+
+
+def _scrub(value: object) -> object:
+    """Strip NUL (0x00) bytes, which PostgreSQL accepts in neither text nor
+    jsonb: psycopg raises DataError and the whole batch is lost.
+
+    Botmaker does send them -- they turned up in AI-analysis summaries as soon
+    as that feature started returning real text, and the same free text reaches
+    session_messages.content as jsonb. A NUL is a control byte with no meaning
+    in this data, so dropping it costs nothing, while failing the batch costs
+    the entire window.
+
+    Values are rebuilt only when something actually changes, so the common case
+    (no NUL anywhere) allocates nothing."""
+    if isinstance(value, str):
+        return value.replace(NUL, "") if NUL in value else value
+    if isinstance(value, Jsonb):
+        scrubbed = _scrub(value.obj)
+        return value if scrubbed is value.obj else Jsonb(scrubbed)
+    if isinstance(value, dict):
+        scrubbed = {k: _scrub(v) for k, v in value.items()}
+        return value if all(a is b for a, b in zip(scrubbed.values(), value.values())) else scrubbed
+    if isinstance(value, list):
+        scrubbed = [_scrub(v) for v in value]
+        return value if all(a is b for a, b in zip(scrubbed, value)) else scrubbed
+    return value
+
+
+def _scrub_rows(table: str, rows: list[dict]) -> list[dict]:
+    out = []
+    for row in rows:
+        scrubbed = {k: _scrub(v) for k, v in row.items()}
+        if any(scrubbed[k] is not row[k] for k in row):
+            logger.warning("%s: stripped NUL bytes from a row before writing", table)
+        out.append(scrubbed)
+    return out
+
+
 def upsert_rows(
     conn: psycopg.Connection,
     table: str,
@@ -65,6 +109,7 @@ def upsert_rows(
     now() there would just stamp every row with the cron time, see README)."""
     if not rows:
         return
+    rows = _scrub_rows(table, rows)
     columns = list(rows[0].keys())
     col_list = ", ".join(columns)
     placeholders = ", ".join(f"%({c})s" for c in columns)
@@ -101,6 +146,7 @@ def replace_children(
     with conn.cursor() as cur:
         cur.execute(f"DELETE FROM {table} WHERE {parent_col} = %s", (parent_id,))
         if rows:
+            rows = _scrub_rows(table, rows)
             columns = list(rows[0].keys())
             col_list = ", ".join(columns)
             placeholders = ", ".join(f"%({c})s" for c in columns)

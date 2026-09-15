@@ -208,6 +208,13 @@ quedaron deprecadas y siempre en NULL; se borran con
 El parser sigue aceptando la forma vieja (la toma como `result` sin `weight`),
 así que un rollback del lado de ellos no vuelve a romper el colector.
 
+Con el análisis devolviendo texto real apareció otra cosa: los `summary` traen
+bytes NUL (`0x00`), que Postgres no acepta ni en `text` ni en `jsonb` — psycopg
+corta con `DataError` y se pierde el batch entero, no la fila mala. `db.py` los
+saca de todos los valores antes de escribir (`_scrub_rows`), en el upsert y en
+las tablas hijas, y loguea un warning cuando pasa. Es un byte de control sin
+significado en estos datos; perderlo no cuesta nada, perder la ventana sí.
+
 ### agent_metrics: por qué solo la ventana de la corrida
 
 `session-status` es obligatorio en `/dashboards/agent-metrics` y sus valores

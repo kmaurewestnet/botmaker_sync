@@ -8,13 +8,15 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 import respx
+from psycopg.types.json import Jsonb
 
 import botmaker_sync.client as client_module
+import botmaker_sync.db as db_module
 import botmaker_sync.sync.agent_metrics as agent_metrics_module
 import botmaker_sync.sync.chats as chats_module
 import botmaker_sync.sync.sessions as sessions_module
 from botmaker_sync.client import BotmakerClient, format_datetime
-from botmaker_sync.db import resolve_window, upsert_rows
+from botmaker_sync.db import replace_children, resolve_window, upsert_rows
 from botmaker_sync.models import AgentMetricModel, ChatModel, SessionModel
 from botmaker_sync.sync.agent_metrics import _row as metric_row, sync_agent_metrics
 from botmaker_sync.sync.chats import _row as chat_row
@@ -176,10 +178,11 @@ def test_session_ai_analysis_partial_block_leaves_the_rest_none():
 
 
 class _FakeCursor:
-    def __init__(self, value, rows=None, sql_log=None):
+    def __init__(self, value, rows=None, sql_log=None, executemany_rows=None):
         self._value = value
         self._rows = rows or []
         self._sql_log = sql_log if sql_log is not None else []
+        self._executemany_rows = executemany_rows if executemany_rows is not None else []
         self._last = (None, None)
         self.rowcount = 0
 
@@ -193,8 +196,9 @@ class _FakeCursor:
         self._sql_log.append(sql)
         self._last = (sql, params)
 
-    def executemany(self, sql=None, *args, **kwargs):
+    def executemany(self, sql=None, params_seq=None, *args, **kwargs):
         self._sql_log.append(sql)
+        self._executemany_rows.append(list(params_seq or []))
 
     def fetchall(self):
         return self._rows
@@ -216,9 +220,10 @@ class _FakeConn:
         self._watermark = watermark
         self._rows = rows or []
         self.sql_log = []
+        self.executemany_rows = []
 
     def cursor(self):
-        return _FakeCursor(self._watermark, self._rows, self.sql_log)
+        return _FakeCursor(self._watermark, self._rows, self.sql_log, self.executemany_rows)
 
     def commit(self):
         pass
@@ -597,3 +602,33 @@ def test_agent_metric_drops_an_unparseable_number_instead_of_raising(caplog):
         item = AgentMetricModel.model_validate({"sessionId": "s1", "onHold": "3,5"})
     assert item.on_hold is None
     assert "3,5" in caplog.text
+
+
+def test_upsert_strips_nul_bytes_postgres_cannot_store():
+    """Botmaker sends NUL (0x00) inside AI-analysis summaries. psycopg raises
+    DataError on them, which loses the whole batch, not just the bad row."""
+    conn = _FakeConn()
+    rows = [{"session_id": "s1", "summary": "hola" + chr(0) + "mundo"}]
+    upsert_rows(conn, "session_ai_analysis", rows, pk_cols=["session_id"])
+    written = conn.executemany_rows[-1]
+    assert written[0]["summary"] == "holamundo"
+    # the caller's own row is left untouched
+    assert chr(0) in rows[0]["summary"]
+
+
+def test_replace_children_strips_nul_inside_jsonb():
+    """Message content is jsonb, which rejects NUL exactly like text does."""
+    conn = _FakeConn()
+    payload = Jsonb({"text": "hola" + chr(0), "buttons": ["si" + chr(0), "no"]})
+    replace_children(conn, "session_messages", "session_id", "s1", [{"id": "m1", "content": payload}])
+    written = conn.executemany_rows[-1][0]["content"]
+    assert written.obj == {"text": "hola", "buttons": ["si", "no"]}
+
+
+def test_scrub_leaves_clean_rows_untouched():
+    """No NUL anywhere -> the same objects come back, nothing is rebuilt."""
+    payload = Jsonb({"text": "hola"})
+    row = {"id": "m1", "content": payload, "from_role": "agent"}
+    scrubbed = db_module._scrub_rows("session_messages", [row])[0]
+    assert scrubbed["content"] is payload
+    assert scrubbed["from_role"] is row["from_role"]
