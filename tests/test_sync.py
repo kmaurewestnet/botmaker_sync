@@ -124,8 +124,8 @@ def test_session_row_pulls_refs_and_variables_from_nested_chat():
 
 
 def test_session_ai_analysis_maps_every_documented_field():
-    """The API sample block, verbatim. Today Botmaker only ever sends
-    doesNotMeetCriteria, so nothing else here is covered by live data."""
+    """The block as Botmaker sends it since September 2026: aspectScores is an
+    open map of {result, weight}, not a fixed object of ints."""
     item = SessionModel.model_validate(
         {
             "id": "s1",
@@ -135,11 +135,8 @@ def test_session_ai_analysis_maps_every_documented_field():
                 "name": "analisis",
                 "justification": "porque si",
                 "aspectScores": {
-                    "conciseness": 1,
-                    "clarity": 2,
-                    "empathyTone": 3,
-                    "understanding": 4,
-                    "resolution": 5,
+                    "conciseness": {"result": 40, "weight": 20},
+                    "clarity": {"result": 55, "weight": 20},
                 },
                 "qualityScore": 90,
             },
@@ -148,9 +145,26 @@ def test_session_ai_analysis_maps_every_documented_field():
     a = item.ai_analysis
     assert (a.summary, a.name, a.justification) == ("resumen", "analisis", "porque si")
     assert (a.does_not_meet_criteria, a.quality_score) == (False, 90)
-    scores = a.aspect_scores
-    assert (scores.conciseness, scores.clarity, scores.empathy_tone) == (1, 2, 3)
-    assert (scores.understanding, scores.resolution) == (4, 5)
+    assert (a.aspect_scores["conciseness"].result, a.aspect_scores["conciseness"].weight) == (40, 20)
+    assert (a.aspect_scores["clarity"].result, a.aspect_scores["clarity"].weight) == (55, 20)
+
+
+def test_session_ai_analysis_keeps_an_aspect_name_it_has_never_seen():
+    """The aspect list is configurable per account, so an unknown key must land
+    as data instead of being dropped or raising."""
+    item = SessionModel.model_validate(
+        {"id": "s1", "aiAnalysis": {"aspectScores": {"tonoDeVoz": {"result": 10, "weight": 5}}}}
+    )
+    assert item.ai_analysis.aspect_scores["tonoDeVoz"].result == 10
+
+
+def test_session_ai_analysis_still_reads_the_pre_2026_09_flat_shape():
+    """A rollback on Botmaker's side must not break the collector again."""
+    item = SessionModel.model_validate(
+        {"id": "s1", "aiAnalysis": {"aspectScores": {"clarity": 40}}}
+    )
+    assert item.ai_analysis.aspect_scores["clarity"].result == 40
+    assert item.ai_analysis.aspect_scores["clarity"].weight is None
 
 
 def test_session_ai_analysis_partial_block_leaves_the_rest_none():
@@ -378,6 +392,36 @@ def test_sync_sessions_skips_the_sweep_when_not_tracking_open_sessions():
         conn = _FakeConn(None)
         sync_sessions(BotmakerClient("tok", BASE), conn, since, until, **kwargs)
         assert not any("window_expired" in s for s in conn.sql_log), kwargs
+
+
+@respx.mock
+def test_sync_sessions_writes_one_row_per_scored_aspect():
+    """End to end: the new aspectScores map must reach session_aspect_scores,
+    which is what the flat columns can no longer hold."""
+    _sessions_route(
+        {
+            "items": [
+                {
+                    "id": "s1",
+                    "aiAnalysis": {
+                        "qualityScore": 80,
+                        "aspectScores": {
+                            "clarity": {"result": 55, "weight": 20},
+                            "empathyTone": {"result": 30, "weight": 10},
+                        },
+                    },
+                }
+            ]
+        }
+    )
+    conn = _FakeConn()
+    until = datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc)
+    sync_sessions(BotmakerClient("t", BASE), conn, until - timedelta(minutes=5), until)
+
+    sql = " ".join(str(q) for q in conn.sql_log)
+    assert "INSERT INTO session_ai_analysis" in sql
+    assert "INSERT INTO session_aspect_scores" in sql
+    assert "DELETE FROM session_aspect_scores" in sql
 
 
 def test_session_row_records_how_the_session_was_closed():

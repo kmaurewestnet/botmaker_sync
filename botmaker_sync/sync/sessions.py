@@ -181,7 +181,6 @@ def sync_sessions(
 
                 if item.ai_analysis is not None:
                     a = item.ai_analysis
-                    scores = a.aspect_scores
                     upsert_rows(
                         conn,
                         "session_ai_analysis",
@@ -193,14 +192,26 @@ def sync_sessions(
                                 "name": a.name,
                                 "justification": a.justification,
                                 "quality_score": a.quality_score,
-                                "aspect_conciseness": scores.conciseness if scores else None,
-                                "aspect_clarity": scores.clarity if scores else None,
-                                "aspect_empathy_tone": scores.empathy_tone if scores else None,
-                                "aspect_understanding": scores.understanding if scores else None,
-                                "aspect_resolution": scores.resolution if scores else None,
                             }
                         ],
                         pk_cols=["session_id"],
+                    )
+                    # Replaced wholesale, not upserted: an aspect dropped from
+                    # the account's config must disappear from the mirror too.
+                    replace_children(
+                        conn,
+                        "session_aspect_scores",
+                        "session_id",
+                        session_id,
+                        [
+                            {
+                                "session_id": session_id,
+                                "aspect": aspect,
+                                "result": score.result,
+                                "weight": score.weight,
+                            }
+                            for aspect, score in (a.aspect_scores or {}).items()
+                        ],
                     )
             conn.commit()
             count += len(rows)

@@ -242,7 +242,6 @@ CREATE TABLE IF NOT EXISTS session_variables (
 
 -- Populated from /sessions?include-ai-analysis=true (always on); sessions the
 -- API returns without an aiAnalysis block simply get no row.
--- aspectScores is a small fixed-shape object -> flattened to real columns.
 CREATE TABLE IF NOT EXISTS session_ai_analysis (
     session_id             text PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     summary                text,
@@ -250,11 +249,27 @@ CREATE TABLE IF NOT EXISTS session_ai_analysis (
     name                   text,
     justification          text,
     quality_score          integer,
+    -- DEPRECATED, always NULL: aspectScores used to be a fixed object of ints
+    -- and was flattened here. Since 2026-09 it is an open map with a weight per
+    -- aspect, which these columns cannot represent -> session_aspect_scores.
+    -- Kept so existing installs don't lose anything on init-db; drop them with
+    -- migrations/2026-09-15_drop_flat_aspect_columns.sql once nothing reads them.
     aspect_conciseness     integer,
     aspect_clarity         integer,
     aspect_empathy_tone    integer,
     aspect_understanding   integer,
     aspect_resolution      integer
+);
+
+-- One row per scored aspect. The aspect list is configurable per account, so
+-- it is stored as rows rather than columns -- same reasoning as session_variables.
+-- `weight` is how much the aspect counts toward session_ai_analysis.quality_score.
+CREATE TABLE IF NOT EXISTS session_aspect_scores (
+    session_id text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    aspect     text NOT NULL, -- 'conciseness', 'clarity', 'empathyTone', ...
+    result     integer,
+    weight     integer,
+    PRIMARY KEY (session_id, aspect)
 );
 
 -- ===== dashboards / agent metrics =====

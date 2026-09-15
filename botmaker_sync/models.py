@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated, Dict, Optional
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -153,12 +153,36 @@ class SessionEventModel(ApiModel):
     info: dict | None = None
 
 
-class SessionAspectScores(ApiModel):
-    conciseness: int | None = None
-    clarity: int | None = None
-    empathy_tone: int | None = Field(None, alias="empathyTone")
-    understanding: int | None = None
-    resolution: int | None = None
+class SessionAspectScore(ApiModel):
+    """One aspect's score. `weight` is how much it counts toward qualityScore."""
+
+    result: int | None = None
+    weight: int | None = None
+
+
+def _aspect_scores(value: object) -> object:
+    """Botmaker changed this field's shape in September 2026, when they fixed
+    the bug that had AI analysis returning empty.
+
+    Before: a fixed object of ints  -> {"clarity": 40}
+    After:  an open map of objects  -> {"clarity": {"result": 40, "weight": 20}}
+
+    The old form is still accepted here (wrapped as a result with no weight) so
+    a rollback on their side wouldn't break the collector a second time."""
+    if isinstance(value, dict):
+        return {
+            key: {"result": item} if isinstance(item, (int, float, str)) else item
+            for key, item in value.items()
+        }
+    return value
+
+
+# Keys are whatever Botmaker sends (conciseness, clarity, empathyTone, ...) and
+# are NOT constrained to a known set: the whole point of the new shape is that
+# the aspect list is configurable per account.
+AspectScores = Annotated[
+    Optional[Dict[str, SessionAspectScore]], BeforeValidator(_aspect_scores)
+]
 
 
 class SessionAiAnalysisModel(ApiModel):
@@ -166,7 +190,7 @@ class SessionAiAnalysisModel(ApiModel):
     does_not_meet_criteria: bool | None = Field(None, alias="doesNotMeetCriteria")
     name: str | None = None
     justification: str | None = None
-    aspect_scores: SessionAspectScores | None = Field(None, alias="aspectScores")
+    aspect_scores: AspectScores = Field(None, alias="aspectScores")
     quality_score: int | None = Field(None, alias="qualityScore")
 
 

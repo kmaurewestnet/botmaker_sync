@@ -185,6 +185,29 @@ query de preview):
 psql "$DATABASE_URL" -f migrations/2026-08-04_backfill_chats_synced_at.sql
 ```
 
+### aiAnalysis: la forma de `aspectScores` cambió en 2026-09
+
+Botmaker arregló el bug que hacía que `aiAnalysis` volviera vacío y, en la
+misma tanda, cambió la forma del campo:
+
+```
+antes:  "aspectScores": {"clarity": 40}
+ahora:  "aspectScores": {"clarity": {"result": 40, "weight": 20}}
+```
+
+El cambio tumbaba el sync entero de `sessions` (no solo la analítica): el
+bloque viene dentro de cada item de `/sessions`, así que una `ValidationError`
+abortaba la página completa.
+
+Los aspectos ahora se guardan en `session_aspect_scores`, una fila por aspecto
+con `result` y `weight`, porque la lista de aspectos es configurable por cuenta
+y ya no entra en columnas fijas. Las cinco `aspect_*` de `session_ai_analysis`
+quedaron deprecadas y siempre en NULL; se borran con
+`migrations/2026-09-15_drop_flat_aspect_columns.sql`.
+
+El parser sigue aceptando la forma vieja (la toma como `result` sin `weight`),
+así que un rollback del lado de ellos no vuelve a romper el colector.
+
 ### agent_metrics: por qué solo la ventana de la corrida
 
 `session-status` es obligatorio en `/dashboards/agent-metrics` y sus valores
